@@ -217,6 +217,7 @@ describe("Files Controller", () => {
                         checked_cycles: 0,
                         total_cycles: 1,
                         unchecked_cycles: [1],
+                        awaiting_fix: false,
                         qc_required: null,
                         qc_checked: false,
                         qc_checked_cycles: 0,
@@ -239,6 +240,7 @@ describe("Files Controller", () => {
                         checked_cycles: 0,
                         total_cycles: 1,
                         unchecked_cycles: [1],
+                        awaiting_fix: false,
                         qc_required: null,
                         qc_checked: false,
                         qc_checked_cycles: 0,
@@ -749,6 +751,64 @@ describe("Files Controller", () => {
                 // Cycles 3 and 4 haven't finished yet — they must not show
                 // up as needing a check.
                 unchecked_cycles: [1, 2],
+            });
+        });
+
+        describe("a QC problem sends the cycle back for a fix and a new check", () => {
+            // One finished cycle, a standard check at `checkAt` and a QC
+            // row at `qcAt` — returns the overview item.
+            async function overviewWith(check: { status: string; at: string }, qc: { status: string; at: string }) {
+                mockRequest = { query: {} };
+                const db = jest.fn((table: string) => {
+                    if (table === "subquery") {
+                        return chainable([
+                            { project_number: "P1", position: "10", workstation: "Hardware", latest_status: "complete" },
+                        ]);
+                    }
+                    if (table === "order_completion_log") {
+                        return chainable([
+                            { project_number: "P1", position: "10", workstation: "Hardware", cycle_index: 1, max_total_cycles: 1 },
+                        ]);
+                    }
+                    if (table === "order_cycle_checks") {
+                        return chainable([
+                            { project_number: "P1", position: "10", workstation: "Hardware", cycle_index: 1, status: check.status, employee_name: "Eva", created_at: check.at },
+                        ]);
+                    }
+                    if (table === "order_qc_checks") {
+                        return chainable([
+                            { project_number: "P1", position: "10", workstation: "Hardware", cycle_index: 1, status: qc.status, engineer_name: "Marie", created_at: qc.at },
+                        ]);
+                    }
+                    return chainable([]);
+                });
+                (getDb as jest.Mock).mockResolvedValue(db);
+                await getDocumentsOverview(mockRequest as Request, mockResponse as Response);
+                return mockJson.mock.calls[0][0].items[0];
+            }
+
+            it("an OK check followed by a QC problem is no longer checked — waiting for fix", async () => {
+                const item = await overviewWith(
+                    { status: "ok", at: "2026-09-29T10:00:00Z" },
+                    { status: "issue", at: "2026-09-29T11:00:00Z" },
+                );
+                expect(item).toMatchObject({ checked: false, awaiting_fix: true, unchecked_cycles: [1] });
+            });
+
+            it("a new OK check after the QC problem counts again (ready for QC)", async () => {
+                const item = await overviewWith(
+                    { status: "ok", at: "2026-09-29T12:00:00Z" },
+                    { status: "issue", at: "2026-09-29T11:00:00Z" },
+                );
+                expect(item).toMatchObject({ checked: true, awaiting_fix: false, qc_checked: false });
+            });
+
+            it("a passed QC doesn't affect the standard check", async () => {
+                const item = await overviewWith(
+                    { status: "ok", at: "2026-09-29T10:00:00Z" },
+                    { status: "ok", at: "2026-09-29T11:00:00Z" },
+                );
+                expect(item).toMatchObject({ checked: true, awaiting_fix: false, qc_checked: true });
             });
         });
 

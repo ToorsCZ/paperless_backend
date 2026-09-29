@@ -5,6 +5,7 @@ import fs from "fs";
 import { convertToPdfA, PdfaConversionError } from "../services/pdfaService";
 import { resolvePbomTypeForWorkplace } from "../config/documentTypes";
 import { getQcRequiredForPositions } from "../services/qcRequirementService";
+import { getOrderHistory } from "../services/orderHistoryService";
 
 /**
  * Batch-resolves check status for a set of (project_number, position)
@@ -30,12 +31,18 @@ import { getQcRequiredForPositions } from "../services/qcRequirementService";
  */
 interface CycleCheckDetail {
     cycleIndex: number;
-    checked: boolean; // has an "ok" row — the currently-latest one for this cycle
+    // latest standard check is "ok" AND no QC problem was reported after it
+    checked: boolean;
     status: "ok" | "issue" | null; // latest recorded status, whatever it was
     employeeName: string | null;
     note: string | null;
     checkedAt: string | null;
+    // QC reported a problem after the latest standard check: the cycle is
+    // waiting for a fix and a new standard check (then QC again).
+    awaitingFix: boolean;
 }
+
+const timeOf = (value: unknown): number => (value ? new Date(value as any).getTime() : 0);
 
 // A quality engineer's sign-off on one cycle (order_qc_checks) — separate
 // from, and in addition to, the standard check above.
@@ -252,13 +259,21 @@ async function getCheckStatusForPositions(
 
         const cycles: CycleCheckDetail[] = finishedCycleIndexes.map((cycleIndex) => {
             const row = byCycle?.get(cycleIndex);
+            // A QC problem newer than the latest standard check sends the
+            // cycle back: it needs fixing and checking again — an earlier
+            // "ok" check no longer counts. A new "ok" check after the QC
+            // report makes it checked again (and ready for QC).
+            const qcRow = qcByCycle?.get(cycleIndex);
+            const awaitingFix =
+                qcRow?.status === "issue" && timeOf(qcRow.created_at) > timeOf(row?.created_at);
             return {
                 cycleIndex,
-                checked: row?.status === "ok",
+                checked: row?.status === "ok" && !awaitingFix,
                 status: row?.status ?? null,
                 employeeName: row?.employee_name ?? null,
                 note: row?.note ?? null,
                 checkedAt: row?.created_at ?? null,
+                awaitingFix,
             };
         });
 
@@ -373,6 +388,7 @@ export const getDocumentById = async (req: Request, res: Response) => {
                     employeeName: null,
                     note: null,
                     checkedAt: null,
+                    awaitingFix: false,
                 },
             ],
             qc: EMPTY_QC_STATUS,
@@ -391,6 +407,13 @@ export const getDocumentById = async (req: Request, res: Response) => {
               ])
             : new Map<string, boolean>();
 
+        // Every preparation, completion, standard check and QC sign-off
+        // for this position at this workstation, oldest first — the check
+        // modals show it per cycle, so repeated rounds stay visible.
+        const history = latestCompletion
+            ? await getOrderHistory(doc.project_number, doc.position, workstation)
+            : [];
+
         res.json({
             ...doc,
             status: latestCompletion?.status || null,
@@ -400,6 +423,7 @@ export const getDocumentById = async (req: Request, res: Response) => {
             qc_checked: checkStatus.qc.checked,
             qc_checked_cycles: checkStatus.qc.checkedCycles,
             qc_cycles: checkStatus.qc.cycles,
+            history,
             revisioned: !!hasEditedRevision,
             checked: checkStatus.checked,
             checked_cycles: checkStatus.checkedCycles,
@@ -620,6 +644,7 @@ export const getDocumentsOverview = async (req: Request, res: Response) => {
                 checkedCycles: 0,
                 checked: false,
                 uncheckedCycles: [1],
+                cycles: [] as CycleCheckDetail[],
                 qc: EMPTY_QC_STATUS,
             };
             return {
@@ -644,6 +669,9 @@ export const getDocumentsOverview = async (req: Request, res: Response) => {
                 // verified — lets the overview show exactly what's left
                 // per position, not just a count.
                 unchecked_cycles: check.uncheckedCycles,
+                // QC reported a problem on some cycle after its last standard
+                // check — waiting for a fix and a new check (see awaitingFix).
+                awaiting_fix: check.cycles.some((c) => c.awaitingFix),
                 // Needs a quality-control check per its TMP file (00000040
                 // = "j"); null while not resolved yet (see
                 // qcRequirementService — filled in the background).

@@ -6,6 +6,7 @@ import crypto from "crypto";
 import { PDFDocument, PDFFont, StandardFonts } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import { findFontFile } from "../utils/code39Barcode";
+import { getOrderHistory, OrderHistoryEvent, OrderHistoryEventType } from "./orderHistoryService";
 import { getDb } from "../config/database";
 import { DOC_MANAGER_URL } from "./workstationService";
 import {
@@ -186,7 +187,7 @@ async function getCycleInfoForOrder(
     orderId: string,
     projectNumber: string,
     position: string,
-): Promise<CycleInfoRow[]> {
+): Promise<{ rows: CycleInfoRow[]; history: OrderHistoryEvent[] }> {
     const db = await getDb();
 
     const completionRows: { cycle_index: number; employee_name: string; workstation: string }[] = await db(
@@ -206,7 +207,7 @@ async function getCycleInfoForOrder(
     }
 
     const cycleIndexes = Array.from(completedByCycle.keys()).sort((a, b) => a - b);
-    if (cycleIndexes.length === 0) return [];
+    if (cycleIndexes.length === 0) return { rows: [], history: [] };
 
     const [prepRows, checkRows, qcRows] = await Promise.all([
         db("order_preparation_log")
@@ -249,13 +250,17 @@ async function getCycleInfoForOrder(
         }
     }
 
-    return cycleIndexes.map((cycleIndex) => ({
+    const rows = cycleIndexes.map((cycleIndex) => ({
         cycleIndex,
         preparedBy: preparedByCycle.get(cycleIndex) ?? null,
         completedBy: completedByCycle.get(cycleIndex) ?? null,
         checkedBy: checkedByCycle.get(cycleIndex) ?? null,
         qcBy: qcByCycle.get(cycleIndex) ?? null,
     }));
+    // The table above shows only the latest of each; the history keeps
+    // every round (check → QC problem → fix → check → QC …).
+    const history = workstation ? await getOrderHistory(projectNumber, position, workstation) : [];
+    return { rows, history };
 }
 
 const PAGE_WIDTH = 595.28; // A4 portrait, points
@@ -333,70 +338,157 @@ export function toFontSafeText(text: string, supported: Set<number>): string {
     return out;
 }
 
+// Fits the 515pt between the margins at BODY_SIZE (0.6em per char).
+const LINE_CHARS = 95;
+
+const HISTORY_EVENT_LABEL: Record<OrderHistoryEventType, string> = {
+    prepared: "Příprava",
+    completed: "Dokončení",
+    check: "Kontrola",
+    qc: "Kontrola kv.",
+};
+const HISTORY_RESULT_LABEL: Record<string, string> = {
+    complete: "Dokončeno",
+    complete_with_changes: "Se změnami",
+    missing_product: "Chybí díl",
+    shipped_incomplete: "Neúplné",
+    ok: "OK",
+    issue: "Problém",
+};
+
+function formatArchiveTime(iso: string): string {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString("cs-CZ", {
+        timeZone: "Europe/Prague",
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+    });
+}
+
+/** Splits text into lines of at most `width` characters, on spaces where possible. */
+export function wrapText(text: string, width: number): string[] {
+    const lines: string[] = [];
+    for (const paragraph of text.split(/\r?\n/)) {
+        let line = "";
+        for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+            // A single word longer than a line is hard-split.
+            for (let w = word; w.length > 0; w = w.slice(width)) {
+                const piece = w.slice(0, width);
+                if (!line) line = piece;
+                else if (line.length + 1 + piece.length <= width) line += ` ${piece}`;
+                else {
+                    lines.push(line);
+                    line = piece;
+                }
+            }
+        }
+        if (line) lines.push(line);
+    }
+    return lines;
+}
+
 /**
- * Appends one or more pages listing who prepared/ran/checked each cycle
- * (see getCycleInfoForOrder) to the end of the given PDF, before it's
- * converted to PDF/A for archival. Uses a fixed-width Courier layout
- * (padEnd-aligned columns) rather than drawing an actual table grid —
- * plenty readable for a plain production record, and far less code.
- * Returns the ORIGINAL bytes unchanged if there's nothing to add.
+ * Appends the "Výrobní záznam" record to the end of the given PDF, before
+ * it's converted to PDF/A for archival: a summary table (who prepared /
+ * completed / checked / QC'd each cycle — the latest of each), then the
+ * full chronological history (see orderHistoryService) — every completion,
+ * every standard check and every QC round with its notes, so repeated
+ * check ↔ QC rounds are all on record. Fixed-width Courier layout
+ * (padEnd-aligned columns) rather than a drawn table grid — plenty
+ * readable, far less code. Flows onto as many pages as needed. Returns
+ * the ORIGINAL bytes unchanged if there's nothing to add.
  */
-export async function appendCycleInfoPage(pdfBytes: Buffer, rows: CycleInfoRow[]): Promise<Buffer> {
+export async function appendCycleInfoPage(
+    pdfBytes: Buffer,
+    rows: CycleInfoRow[],
+    history: OrderHistoryEvent[] = [],
+): Promise<Buffer> {
     if (rows.length === 0) return pdfBytes;
 
     const pdfDoc = await PDFDocument.load(pdfBytes);
     const { font, boldFont } = await embedArchiveFonts(pdfDoc);
 
     const supported = new Set(font.getCharacterSet());
+    const safe = (s: string) => toFontSafeText(s, supported);
     // Always leaves at least one space before the next column, even when a
     // name has to be cut short.
-    const col = (s: string, w: number) => toFontSafeText(s, supported).slice(0, w - 1).padEnd(w);
-    const headerLine =
+    const col = (s: string, w: number) => safe(s).slice(0, w - 1).padEnd(w);
+
+    // ── line cursor: every draw goes through here, so any section can
+    // flow onto a new page ──
+    let page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+    let y = PAGE_HEIGHT - MARGIN;
+    let onNewPage: (() => void) | null = null; // e.g. repeat a table header
+    const newPage = () => {
+        page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+        y = PAGE_HEIGHT - MARGIN;
+        onNewPage?.();
+    };
+    const drawLine = (text: string, f: PDFFont = font) => {
+        if (y < MARGIN) newPage();
+        page.drawText(text, { x: MARGIN, y, size: BODY_SIZE, font: f });
+        y -= LINE_HEIGHT;
+    };
+    const drawTitle = (text: string) => {
+        if (y - (TITLE_SIZE + 14) - LINE_HEIGHT < MARGIN) newPage();
+        page.drawText(safe(text), { x: MARGIN, y, size: TITLE_SIZE, font: boldFont });
+        y -= TITLE_SIZE + 14;
+    };
+
+    // ── summary: latest person per role, per cycle ──
+    const tableHeader =
         col("Cyklus", CYCLE_COL) +
         col("Šrouby vychystal/a", NAME_COL) +
         col("Hardware vychystal/a", NAME_COL) +
         col("Zkontroloval/a", NAME_COL) +
         col("Kontrola kvality", NAME_COL);
 
-    // One line kept free at the bottom for the QC legend below.
-    const rowsPerPage = Math.floor((PAGE_HEIGHT - MARGIN * 2 - (TITLE_SIZE + 14) - 2 * LINE_HEIGHT) / LINE_HEIGHT);
-
-    let page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-    let y = PAGE_HEIGHT - MARGIN;
-    for (let i = 0; i < rows.length; i += rowsPerPage) {
-        const chunk = rows.slice(i, i + rowsPerPage);
-        if (i > 0) {
-            page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-            y = PAGE_HEIGHT - MARGIN;
-        }
-
-        if (i === 0) {
-            page.drawText("Výrobní záznam", { x: MARGIN, y, size: TITLE_SIZE, font: boldFont });
-            y -= TITLE_SIZE + 14;
-        }
-
-        page.drawText(headerLine, { x: MARGIN, y, size: BODY_SIZE, font: boldFont });
-        y -= LINE_HEIGHT;
-
-        for (const row of chunk) {
-            const line =
-                col(String(row.cycleIndex), CYCLE_COL) +
+    drawTitle("Výrobní záznam");
+    drawLine(tableHeader, boldFont);
+    onNewPage = () => drawLine(tableHeader, boldFont);
+    for (const row of rows) {
+        drawLine(
+            col(String(row.cycleIndex), CYCLE_COL) +
                 col(row.preparedBy ?? "-", NAME_COL) +
                 col(row.completedBy ?? "-", NAME_COL) +
                 col(row.checkedBy ?? "-", NAME_COL) +
-                col(row.qcBy ?? "-", NAME_COL);
-            page.drawText(line, { x: MARGIN, y, size: BODY_SIZE, font });
-            y -= LINE_HEIGHT;
-        }
+                col(row.qcBy ?? "-", NAME_COL),
+        );
+    }
+    onNewPage = null;
+    if (rows.some((r) => r.qcBy?.startsWith(QC_ISSUE_MARK))) {
+        drawLine(safe(`${QC_ISSUE_MARK} = kontrola kvality zjistila problém`));
     }
 
-    if (rows.some((r) => r.qcBy?.startsWith(QC_ISSUE_MARK))) {
-        page.drawText(toFontSafeText(`${QC_ISSUE_MARK} = kontrola kvality zjistila problém`, supported), {
-            x: MARGIN,
-            y: y - 4,
-            size: BODY_SIZE,
-            font,
-        });
+    // ── full history: every event, oldest first, with notes ──
+    if (history.length > 0) {
+        y -= LINE_HEIGHT;
+        drawTitle("Historie");
+        const historyHeader =
+            col("Čas", 19) + col("Cyklus", CYCLE_COL) + col("Událost", 13) + col("Kdo", NAME_COL) + col("Výsledek", 14);
+        drawLine(historyHeader, boldFont);
+        onNewPage = () => drawLine(historyHeader, boldFont);
+        const NOTE_INDENT = "    ";
+        for (const event of history) {
+            drawLine(
+                col(formatArchiveTime(event.at), 19) +
+                    col(String(event.cycleIndex), CYCLE_COL) +
+                    col(HISTORY_EVENT_LABEL[event.type], 13) +
+                    col(event.by, NAME_COL) +
+                    col(event.status ? HISTORY_RESULT_LABEL[event.status] ?? event.status : "-", 14),
+            );
+            if (event.note) {
+                // Notes are never cut short — wrapped in full.
+                for (const line of wrapText(`„${event.note}“`, LINE_CHARS - NOTE_INDENT.length)) {
+                    drawLine(NOTE_INDENT + safe(line));
+                }
+            }
+        }
+        onNewPage = null;
     }
 
     return Buffer.from(await pdfDoc.save());
@@ -455,7 +547,7 @@ async function archiveOrder(
         // the archive entirely.
         let bufferToArchive = doc.buffer;
         try {
-            bufferToArchive = await appendCycleInfoPage(doc.buffer, cycleInfo);
+            bufferToArchive = await appendCycleInfoPage(doc.buffer, cycleInfo.rows, cycleInfo.history);
         } catch (err: any) {
             console.error(
                 `[ARCHIVE] Failed to append cycle info page for order ${row.order_id}: ${err.message} — archiving without it`,
