@@ -12,12 +12,14 @@ import {
     isValidCheckStatus,
     getCompletionQueue,
     getProductStats,
+    OrderCompletionStatus,
 } from "../services/completionService";
 import { buildPrepLabelPdf, printPrepLabelBuffer } from "../services/documentPrinterService";
 import { getDb, getNormsDb } from "../config/database";
 import { closeOrderInToors } from "../services/toorsService";
 import { normalizeWorkplace } from "../utils/normalizeWorkplace";
 import { getOrderCycleSnapshot, motorCycleRange } from "../services/workstationService";
+import { completionWorkplaceForPbomType } from "../config/documentTypes";
 
 /**
  * Looks up the sales order number from ptl_prep_queue using project number
@@ -296,6 +298,90 @@ export const getStatsHandler = async (req: Request, res: Response) => {
         );
     } catch (error) {
         console.error("Error fetching stats:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+// Statuses a manual completion may use — never plain "complete", so a
+// manual completion never closes the order in TOORS automatically.
+const MANUAL_COMPLETION_STATUSES: OrderCompletionStatus[] = [
+    "complete_with_changes",
+    "missing_product",
+    "shipped_incomplete",
+];
+
+/**
+ * Completes one cycle of an order that can't be completed through P2L
+ * (so there's no FINISHED event and no kiosk entry for it) — from the
+ * hidden, admin-PIN-protected action in the document viewer. Everything
+ * is derived from the opened document: its type gives the workplace
+ * (Hardware/Motor), and if the order DID partly go through P2L, the
+ * existing completion's order_id/sales order/production order are reused
+ * so its cycles stay one order. Otherwise a synthetic order_id
+ * ("manual:<project>:<position>:<workplace>") groups its cycles, and the
+ * sales/production order are looked up like the prep label does.
+ */
+export const createManualCompletion = async (req: Request, res: Response) => {
+    const { documentId, cycleIndex, totalCycles, employeeName, status } = req.body ?? {};
+    if (!documentId || !cycleIndex || !employeeName || !status) {
+        return res.status(400).json({
+            error: "documentId, cycleIndex, employeeName, and status are required",
+        });
+    }
+    if (!MANUAL_COMPLETION_STATUSES.includes(status)) {
+        return res.status(400).json({
+            error: `status must be one of: ${MANUAL_COMPLETION_STATUSES.join(", ")}`,
+        });
+    }
+
+    try {
+        const db = await getDb();
+        const doc = await db("documents").where({ id: documentId }).first();
+        if (!doc) {
+            return res.status(404).json({ error: "Document not found" });
+        }
+        const workstation = completionWorkplaceForPbomType(doc.document_type);
+        if (!workstation) {
+            return res.status(400).json({
+                error: "Manual completion is only possible for Hardware and Motor BOMs",
+            });
+        }
+
+        const existing = await db("order_completion_log")
+            .where({ project_number: doc.project_number, position: doc.position, workstation })
+            .orderBy("created_at", "desc")
+            .first();
+        const salesOrder = existing?.sales_order ?? (await lookupSalesOrder(doc.project_number, doc.position));
+        const productOrder =
+            existing?.product_order ??
+            (salesOrder ? await lookupProductionOrderNumber(doc.project_number, salesOrder, doc.position) : null);
+        const cycles =
+            typeof totalCycles === "number" && totalCycles > 0 ? Math.floor(totalCycles) : existing?.total_cycles ?? 1;
+        const cycle = Number(cycleIndex);
+        if (!Number.isInteger(cycle) || cycle < 1 || cycle > cycles) {
+            return res.status(400).json({ error: `cycleIndex must be between 1 and ${cycles}` });
+        }
+
+        const orderId = existing?.order_id ?? `manual:${doc.project_number}:${doc.position}:${workstation}`;
+        await recordOrderCompletion({
+            orderId,
+            workstation,
+            cycleIndex: cycle,
+            totalCycles: cycles,
+            productOrder: productOrder ?? undefined,
+            projectNumber: doc.project_number,
+            position: doc.position,
+            salesOrder: salesOrder ?? undefined,
+            employeeName,
+            status,
+        });
+        console.log(
+            `[COMPLETION] Manual completion (no P2L) of ${doc.project_number}/${doc.position} ${workstation} ` +
+                `cycle ${cycle}/${cycles} as "${status}" by ${employeeName} (order ${orderId})`,
+        );
+        res.status(201).json({ status: "ok" });
+    } catch (error) {
+        console.error("Error recording manual completion:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 };

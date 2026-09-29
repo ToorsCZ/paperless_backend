@@ -105,6 +105,20 @@ export function resolvePbomTypeForWorkplace(workplace: string): number {
     return resolved;
 }
 
+/**
+ * The completion workplace a PBOM belongs to — the reverse of
+ * resolvePbomTypeForWorkplace, limited to the two workplaces that go
+ * through completion at all (Hardware, Motor; see completionService's
+ * COMPLETION_KIOSK_WORKPLACES). null for any other document type. Used by
+ * the manual completion of orders that never went through P2L, where the
+ * opened document is all there is to go on.
+ */
+export function completionWorkplaceForPbomType(documentType: number): string | null {
+    if (documentType === DOCUMENT_TYPES.PBOM_HARDWARE) return "Hardware";
+    if (documentType === DOCUMENT_TYPES.PBOM_MOTOR) return "Motor";
+    return null;
+}
+
 // ─── "Open any BOM" (search screen) ────────────────────────────────────────
 //
 // The set of document types considered "a BOM" for the purposes of letting

@@ -17,8 +17,10 @@ import {
     createPrepLabel,
     createOrderCheck,
     getStatsHandler,
+    createManualCompletion,
 } from "../controllers/completionController";
 import { verifyQcPin, createOrderQcCheck } from "../controllers/qualityControlController";
+import { adminPinAuth } from "../middleware/apiKeyAuth";
 
 const router = Router();
 
@@ -31,6 +33,9 @@ router.get("/search-pbom", searchPbomHandler);
 router.get("/resolve-scan", resolveScanHandler);
 router.get("/pbom-types", listPbomTypesHandler);
 router.post("/order-completion", createOrderCompletion);
+// Hidden, admin-PIN-protected completion of an order that can't go through
+// P2L (non-complete statuses only) — see createManualCompletion.
+router.post("/manual-completion", adminPinAuth, createManualCompletion);
 router.get("/completion-queue", getCompletionQueueHandler);
 router.get("/stats", getStatsHandler);
 router.post("/print-prep-label", createPrepLabel);
