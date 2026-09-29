@@ -12,6 +12,7 @@ import {
     getInFlightCyclesForOrder,
     PbomSearchResult,
 } from "../services/workstationService";
+import { editedPdfDirForType } from "../config/documentTypes";
 import path from "path";
 import fs from "fs";
 import axios from "axios";
@@ -457,7 +458,10 @@ async function saveEditedPdf(documentId: number, pdfBuffer: Buffer) {
 
     if (EDITED_PDF_PATH) {
         try {
-            const networkPath = path.join(EDITED_PDF_PATH, newFilename);
+            const networkPath = path.join(
+                editedPdfDirForType(EDITED_PDF_PATH, doc.document_type),
+                newFilename,
+            );
             const networkDir = path.dirname(networkPath);
             if (!fs.existsSync(networkDir)) {
                 fs.mkdirSync(networkDir, { recursive: true });

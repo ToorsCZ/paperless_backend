@@ -1,3 +1,4 @@
+import path from "path";
 import { normalizeWorkplace } from "../utils/normalizeWorkplace";
 
 // doc_manager document_type IDs, shared between the STARTED-cycle document
@@ -119,7 +120,23 @@ export function completionWorkplaceForPbomType(documentType: number): string | n
     return null;
 }
 
-// ─── "Open any BOM" (search screen) ────────────────────────────────────────
+/**
+ * Where an edited PDF goes on the share. doc_manager types a PDF by its
+ * Production_BOM/{Subtype} folder, so it has to land in the folder of its
+ * own type, or doc_manager re-types it (a Motor edit in Hardware became
+ * PBOM_HARDWARE). `editedPdfPath` (EDITED_PDF_PATH) is one of the subtype
+ * folders, e.g. ...\Production_BOM\Hardware; its siblings are the others.
+ * Non-PBOM / unknown types stay in editedPdfPath itself.
+ */
+export function editedPdfDirForType(editedPdfPath: string, documentType: number | null): string {
+    const name = documentType == null ? undefined : DOCUMENT_TYPE_NAMES[documentType];
+    if (!name?.startsWith("pbom_")) return editedPdfPath;
+    const sub = name.slice("pbom_".length);
+    // pbom_fixed_top_panel -> Fixed_top_panel, as the folders on the share
+    return path.join(path.dirname(editedPdfPath), sub[0]!.toUpperCase() + sub.slice(1));
+}
+
+// ─── "Open any BOM" (search screen)────────────────────────────────────────
 //
 // The set of document types considered "a BOM" for the purposes of letting
 // someone pick freely from whatever doc_manager actually has for a given
