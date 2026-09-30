@@ -323,7 +323,7 @@ async function getCheckStatusForPositions(
  * Also annotated with the same status/completion/revisioned info the
  * overview list carries (see getDocumentsOverview), so the document viewer
  * can decide whether to show the "Finish order" action — that action is
- * only offered from inside an opened, revisioned document, not from the
+ * only offered from inside an opened document, not from the
  * overview list itself.
  */
 export const getDocumentById = async (req: Request, res: Response) => {
