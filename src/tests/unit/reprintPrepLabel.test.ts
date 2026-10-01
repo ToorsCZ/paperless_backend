@@ -8,7 +8,7 @@ jest.mock("../../index", () => ({ io: { emit: jest.fn() } }));
 
 import { Request, Response } from "express";
 import { getDb, getNormsDb } from "../../config/database";
-import { reprintPrepLabel } from "../../controllers/completionController";
+import { getPrepLabelStatus, reprintPrepLabel } from "../../controllers/completionController";
 import { buildPrepLabelPdf, printPrepLabelBuffer } from "../../services/documentPrinterService";
 import { recordOrderPreparation } from "../../services/completionService";
 
@@ -67,5 +67,25 @@ describe("reprintPrepLabel", () => {
         mockDb(null);
         await call({ projectNumber: "P1", position: "10", cycles: [1] });
         expect(status).toHaveBeenCalledWith(404);
+    });
+});
+
+describe("getPrepLabelStatus", () => {
+    const call = async (query: any) => {
+        const json = jest.fn();
+        await getPrepLabelStatus({ query } as unknown as Request, { json, status: jest.fn(() => ({ json })) } as any);
+        return json.mock.calls[0]?.[0];
+    };
+
+    it("tells the print dialog how the label was originally printed", async () => {
+        mockDb();
+        expect(await call({ projectNumber: "P1", position: "10" })).toEqual({
+            printed: { employeeName: "Jan Novak", printedAt: PRINTED_AT, totalCycles: 20 },
+        });
+    });
+
+    it("returns printed: null before the first print", async () => {
+        mockDb(null);
+        expect(await call({ projectNumber: "P1", position: "10" })).toEqual({ printed: null });
     });
 });

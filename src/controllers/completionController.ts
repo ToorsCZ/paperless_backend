@@ -445,6 +445,41 @@ async function sendPrepLabel(res: Response, pdfBuffer: Buffer, projectNumber: st
     }
 }
 
+async function latestPrepLabel(projectNumber: string, position: string) {
+    const db = await getDb();
+    return db("order_preparation_log")
+        .where({ project_number: projectNumber, position })
+        .orderBy("created_at", "desc")
+        .first();
+}
+
+/**
+ * Whether this order's prep label was already printed, and how — the
+ * print dialog switches to reprinting chosen doors when it was.
+ */
+export const getPrepLabelStatus = async (req: Request, res: Response) => {
+    const { projectNumber, position } = req.query;
+    if (typeof projectNumber !== "string" || typeof position !== "string") {
+        return res.status(400).json({ error: "projectNumber and position are required" });
+    }
+    try {
+        const original = await latestPrepLabel(projectNumber, position);
+        res.json({
+            printed:
+                original ?
+                    {
+                        employeeName: original.employee_name,
+                        printedAt: original.created_at,
+                        totalCycles: original.total_cycles ?? 1,
+                    }
+                :   null,
+        });
+    } catch (error) {
+        console.error("Error reading prep label status:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
 /**
  * Reprints chosen doors of an already printed prep label (e.g. the printer
  * ran out of ink halfway through a 20-door order). The labels match the
@@ -458,11 +493,7 @@ export const reprintPrepLabel = async (req: Request, res: Response) => {
     }
 
     try {
-        const db = await getDb();
-        const original = await db("order_preparation_log")
-            .where({ project_number: projectNumber, position })
-            .orderBy("created_at", "desc")
-            .first();
+        const original = await latestPrepLabel(projectNumber, position);
         if (!original) {
             return res.status(404).json({ error: "No prep label has been printed for this order yet" });
         }

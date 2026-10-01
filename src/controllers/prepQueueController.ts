@@ -21,7 +21,6 @@ export const listPrepQueue = async (req: Request, res: Response) => {
             dateTo: typeof dateTo === "string" ? dateTo : undefined,
             workplace: typeof workplace === "string" ? workplace : undefined,
             hardwareType: typeof hardwareType === "string" ? hardwareType : undefined,
-            printed: req.query.printed === "true",
         });
         res.json({ items });
     } catch (error) {
