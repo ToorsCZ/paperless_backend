@@ -49,6 +49,21 @@ describe("buildPrepLabelPdf", () => {
         expect(xrefMatch?.[1]).toBe("11");
     });
 
+    it("reprints only the chosen doors, numbered against the whole order, at the original time", () => {
+        const printedAt = new Date(2026, 9, 1, 8, 5);
+        const pdf = buildPrepLabelPdf("P1", "10", "Jan Novak", 20, null, null, {
+            cycles: [3, 17],
+            printedAt,
+        }).toString("latin1");
+
+        expect(pdf).toContain("/Count 2");
+        expect(pdf).toContain("(3/20)");
+        expect(pdf).toContain("(17/20)");
+        expect(pdf).not.toContain("(1/20)");
+        expect(pdf).toContain(printedAt.toLocaleDateString("cs-CZ"));
+        expect(pdf.match(/xref\n0 (\d+)\n/)?.[1]).toBe("9");
+    });
+
     it("keeps shared order/position/employee info identical across every page", () => {
         const pdf = buildPrepLabelPdf("P42", "99", "Petr Svoboda", 2).toString("latin1");
 

@@ -419,30 +419,77 @@ export const createPrepLabel = async (req: Request, res: Response) => {
             productionOrderNumber,
         );
         await recordOrderPreparation(projectNumber, position, employeeName, cycles);
-
-        // Try to send directly to the Godex prep label printer.
-        // If PREP_LABEL_PRINTER_HOST is configured, the backend prints it and
-        // returns a simple JSON success so the mobile app shows a confirmation.
-        // If not configured, fall back to returning the PDF bytes so the mobile
-        // app can open the system share sheet (previous behaviour — useful for
-        // dev/test or if the printer isn't set up yet).
-        const sentToPrinter = await printPrepLabelBuffer(pdfBuffer);
-
-        if (sentToPrinter) {
-            res.json({ success: true });
-        } else {
-            res.setHeader("Content-Type", "application/pdf");
-            res.setHeader(
-                "Content-Disposition",
-                `attachment; filename="label_${projectNumber}_${position}.pdf"`,
-            );
-            res.send(pdfBuffer);
-        }
+        await sendPrepLabel(res, pdfBuffer, projectNumber, position);
     } catch (error: any) {
         console.error("Error generating prep label:", error);
         res.status(500).json({
             error: error.message || "Internal server error",
         });
+    }
+};
+
+// Try to send directly to the Godex prep label printer.
+// If PREP_LABEL_PRINTER_HOST is configured, the backend prints it and
+// returns a simple JSON success so the mobile app shows a confirmation.
+// If not configured, fall back to returning the PDF bytes so the mobile
+// app can open the system share sheet (previous behaviour — useful for
+// dev/test or if the printer isn't set up yet).
+async function sendPrepLabel(res: Response, pdfBuffer: Buffer, projectNumber: string, position: string) {
+    const sentToPrinter = await printPrepLabelBuffer(pdfBuffer);
+    if (sentToPrinter) {
+        res.json({ success: true });
+    } else {
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `attachment; filename="label_${projectNumber}_${position}.pdf"`);
+        res.send(pdfBuffer);
+    }
+}
+
+/**
+ * Reprints chosen doors of an already printed prep label (e.g. the printer
+ * ran out of ink halfway through a 20-door order). The labels match the
+ * original print — same preparer, time and door count, taken from its
+ * order_preparation_log rows — and nothing new is recorded.
+ */
+export const reprintPrepLabel = async (req: Request, res: Response) => {
+    const { projectNumber, position, cycles } = req.body;
+    if (!projectNumber || !position || !Array.isArray(cycles) || cycles.length === 0) {
+        return res.status(400).json({ error: "projectNumber, position and cycles are required" });
+    }
+
+    try {
+        const db = await getDb();
+        const original = await db("order_preparation_log")
+            .where({ project_number: projectNumber, position })
+            .orderBy("created_at", "desc")
+            .first();
+        if (!original) {
+            return res.status(404).json({ error: "No prep label has been printed for this order yet" });
+        }
+        const total = original.total_cycles ?? 1;
+        const doors = [...new Set(cycles.map(Number))].sort((a, b) => a - b);
+        if (doors.some((c) => !Number.isInteger(c) || c < 1 || c > total)) {
+            return res.status(400).json({ error: `cycles must be between 1 and ${total}` });
+        }
+
+        const salesOrder = await lookupSalesOrder(projectNumber, position);
+        const productionOrderNumber = salesOrder
+            ? await lookupProductionOrderNumber(projectNumber, salesOrder, position)
+            : null;
+        const pdfBuffer = buildPrepLabelPdf(
+            projectNumber,
+            position,
+            original.employee_name,
+            total,
+            salesOrder ?? null,
+            productionOrderNumber,
+            { cycles: doors, printedAt: new Date(original.created_at) },
+        );
+        console.log(`[PREP] Reprinting doors ${doors.join(",")}/${total} of ${projectNumber}/${position}`);
+        await sendPrepLabel(res, pdfBuffer, projectNumber, position);
+    } catch (error: any) {
+        console.error("Error reprinting prep label:", error);
+        res.status(500).json({ error: error.message || "Internal server error" });
     }
 };
 

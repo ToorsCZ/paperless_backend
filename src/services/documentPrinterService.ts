@@ -890,8 +890,10 @@ export function buildPrepLabelPdf(
     totalCycles: number = 1,
     salesOrder: string | null = null,
     productionOrderNumber: string | null = null,
+    // Reprint: only these doors (1-based), stamped with the original print time.
+    reprint: { cycles: number[]; printedAt: Date } | null = null,
 ): Buffer {
-    const now = new Date();
+    const now = reprint?.printedAt ?? new Date();
     const dateStr = now.toLocaleDateString("cs-CZ");
     const timeStr = now.toLocaleTimeString("cs-CZ", {
         hour: "2-digit",
@@ -900,7 +902,9 @@ export function buildPrepLabelPdf(
 
     const pageWidth = PREP_LABEL_PAGE_WIDTH_PT;
     const pageHeight = PREP_LABEL_PAGE_HEIGHT_PT;
-    const pageCount = Math.max(1, totalCycles);
+    const totalDoors = Math.max(1, totalCycles);
+    const cyclesToPrint = reprint?.cycles ?? Array.from({ length: totalDoors }, (_, i) => i + 1);
+    const pageCount = cyclesToPrint.length;
 
     // Locate + parse the barcode font once per call; null → the barcode
     // is drawn as vector bars instead (see buildBarcodeOps).
@@ -953,10 +957,10 @@ export function buildPrepLabelPdf(
             { text: `${dateStr} ${timeStr}`, size: 9, y: 279 },
         );
 
-        if (pageCount > 1) {
+        if (totalDoors > 1) {
             lines.push(
                 { text: "VRATA", size: 10, y: 295 },
-                { text: `${cycleIndex}/${pageCount}`, size: 20, y: 318, bold: true },
+                { text: `${cycleIndex}/${totalDoors}`, size: 20, y: 318, bold: true },
             );
         }
 
@@ -1013,7 +1017,7 @@ export function buildPrepLabelPdf(
     }
 
     for (let i = 0; i < pageCount; i++) {
-        const textOps = pageContentOps(i + 1);
+        const textOps = pageContentOps(cyclesToPrint[i]!);
         objects.push(
             `<< /Length ${Buffer.byteLength(textOps, "latin1")} >>\nstream\n${textOps}\nendstream`,
         ); // contentObjBase + i

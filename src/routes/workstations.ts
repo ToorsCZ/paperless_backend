@@ -15,6 +15,7 @@ import {
     createOrderCompletion,
     getCompletionQueueHandler,
     createPrepLabel,
+    reprintPrepLabel,
     createOrderCheck,
     getStatsHandler,
     createManualCompletion,
@@ -39,6 +40,7 @@ router.post("/manual-completion", adminPinAuth, createManualCompletion);
 router.get("/completion-queue", getCompletionQueueHandler);
 router.get("/stats", getStatsHandler);
 router.post("/print-prep-label", createPrepLabel);
+router.post("/reprint-prep-label", reprintPrepLabel);
 router.post("/order-check", createOrderCheck);
 // Quality-control sign-off — the engineer's PIN travels in X-QC-Pin.
 router.post("/qc-check/verify", verifyQcPin);

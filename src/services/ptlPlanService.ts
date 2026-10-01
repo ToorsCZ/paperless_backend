@@ -354,7 +354,12 @@ export interface PrepQueueFilters {
     dateTo?: string | undefined;
     workplace?: string | undefined;
     hardwareType?: string | undefined; // e.g. "Indy" / "Guardy"
+    printed?: boolean | undefined; // the already printed items instead, for reprints
 }
+
+// How far back the "printed" list reaches — reprints are for a label that
+// just came out bad, not for last month's orders.
+const PRINTED_LIST_DAYS = 7;
 
 /**
  * Returns queue items that are still pending — i.e. that don't yet have a
@@ -367,15 +372,31 @@ export interface PrepQueueFilters {
 export async function getPrepQueue(filters: PrepQueueFilters = {}) {
     const db = await getDb();
 
-    let query = db("ptl_prep_queue as q")
-        .whereNotExists(function (this: any) {
-            this.select("*")
-                .from("order_preparation_log as opl")
-                .whereRaw("opl.project_number = q.project_number")
-                .andWhereRaw("opl.position = q.position");
-        })
-        .orderBy("q.planned_date", "asc")
-        .orderBy("q.sales_order", "asc");
+    let query =
+        filters.printed ?
+            db("ptl_prep_queue as q")
+                .join(
+                    db("order_preparation_log")
+                        .select("project_number", "position")
+                        .max("created_at as printed_at")
+                        .max("total_cycles as printed_cycles")
+                        .groupBy("project_number", "position")
+                        .as("p"),
+                    function (this: any) {
+                        this.on("p.project_number", "q.project_number").andOn("p.position", "q.position");
+                    },
+                )
+                .where("p.printed_at", ">=", new Date(Date.now() - PRINTED_LIST_DAYS * 86400000))
+                .orderBy("p.printed_at", "desc")
+        :   db("ptl_prep_queue as q")
+                .whereNotExists(function (this: any) {
+                    this.select("*")
+                        .from("order_preparation_log as opl")
+                        .whereRaw("opl.project_number = q.project_number")
+                        .andWhereRaw("opl.position = q.position");
+                })
+                .orderBy("q.planned_date", "asc")
+                .orderBy("q.sales_order", "asc");
 
     if (filters.date) {
         query = query.andWhere("q.planned_date", filters.date);
@@ -393,7 +414,7 @@ export async function getPrepQueue(filters: PrepQueueFilters = {}) {
         query = query.andWhere("q.hardware_type", filters.hardwareType);
     }
 
-    const rows: any[] = await query.select("q.*");
+    const rows: any[] = await query.select(filters.printed ? ["q.*", "p.printed_at", "p.printed_cycles"] : ["q.*"]);
 
     // Annotate each row with a `locked` flag from the Masterplan database.
     // Rows where vyroba.tisk_zamcen = 1 must not be processed — the
