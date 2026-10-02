@@ -550,26 +550,7 @@ async function printDocumentsForOrder(order: OrderUpdate["order"]) {
     }
 
     try {
-        // Fetch all document types in parallel — they are independent HTTP
-        // calls to doc_manager, each resolving independently (200 or 404).
-        // The original sequential loop added one full round-trip per type
-        // even for types that 404 immediately; parallelising these shaves
-        // 1–3 seconds off the total depending on doc_manager latency.
-        const typesCsv = process.env.DOCUMENTS_TYPES || "14,4,5,21";
-        const typeIds = typesCsv
-            .split(",")
-            .map((s) => parseInt(s.trim(), 10))
-            .filter((n) => !isNaN(n));
-
-        const fetchResults = await Promise.all(
-            typeIds.map((typeId) => fetchDocumentsByType(order, orderCode, typeId)),
-        );
-
-        const docsToPrint: string[] = fetchResults.flat();
-
-        fetchResults.forEach((docs, i) =>
-            console.log(`Found ${docs.length} documents of type ${typeIds[i]}`),
-        );
+        const docsToPrint = await fetchOrderDocuments(order, orderCode);
 
         if (docsToPrint.length === 0) {
             // Nothing found yet (documents may not be generated at this
@@ -583,6 +564,55 @@ async function printDocumentsForOrder(order: OrderUpdate["order"]) {
     } catch (error) {
         console.error("Error in printDocumentsForOrder:", error);
     }
+}
+
+/**
+ * Downloads every DOCUMENTS_TYPES document doc_manager has for the order
+ * into temp files (which triggerPrinting deletes). All types in parallel —
+ * they are independent HTTP calls to doc_manager, each resolving
+ * independently (200 or 404); a sequential loop added one full round-trip
+ * per type even for types that 404 immediately.
+ */
+async function fetchOrderDocuments(order: OrderUpdate["order"], orderCode: string): Promise<string[]> {
+    const typesCsv = process.env.DOCUMENTS_TYPES || "14,4,5,21";
+    const typeIds = typesCsv
+        .split(",")
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => !isNaN(n));
+
+    const fetchResults = await Promise.all(
+        typeIds.map((typeId) => fetchDocumentsByType(order, orderCode, typeId)),
+    );
+    fetchResults.forEach((docs, i) => console.log(`Found ${docs.length} documents of type ${typeIds[i]}`));
+    return fetchResults.flat();
+}
+
+/**
+ * Manual (re)print of an order's documentation from the search screen —
+ * the same documents the STARTED flow prints, but even when they were
+ * already printed (lost, damaged, …). Resolves once the documents are
+ * downloaded, with how many there are; the printing itself carries on in
+ * the background, like the STARTED flow, since rendering several PDFs
+ * takes longer than a tablet request should wait.
+ */
+export async function printOrderDocuments(projectNumber: string, position: string): Promise<number> {
+    const order = {
+        _id: `manual:${projectNumber}:${position}`,
+        projectNumber,
+        position,
+        productOrder: projectNumber,
+        salesOrder: "",
+    } as OrderUpdate["order"];
+
+    const docs = await fetchOrderDocuments(order, projectNumber);
+    if (docs.length > 0) {
+        console.log(`[DOCS] Manual print of ${docs.length} documents for ${projectNumber}/${position}`);
+        triggerPrinting(docs, order)
+            // A first print by hand counts — STARTED then won't print them again.
+            .then(() => recordDocumentPrint(projectNumber, position, order._id))
+            .catch((err) => console.error(`[DOCS] Manual print of ${projectNumber}/${position} failed:`, err));
+    }
+    return docs.length;
 }
 
 async function fetchDocumentsByType(

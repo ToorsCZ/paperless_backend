@@ -6,6 +6,7 @@ import {
     getWorkstationLog,
     importPbom,
     searchPbomHandler,
+    printOrderDocumentsHandler,
     resolveScanHandler,
     listPbomTypesHandler,
     saveEdited,
@@ -32,6 +33,9 @@ router.post("/order-update", receiveOrderUpdate);
 router.get("/log", getWorkstationLog);
 router.post("/import-pbom", importPbom);
 router.get("/search-pbom", searchPbomHandler);
+// Manual (re)print of the order documentation (DOCUMENTS_TYPES), even if
+// already printed — see printOrderDocuments.
+router.post("/print-documents", printOrderDocumentsHandler);
 router.get("/resolve-scan", resolveScanHandler);
 router.get("/pbom-types", listPbomTypesHandler);
 router.post("/order-completion", createOrderCompletion);

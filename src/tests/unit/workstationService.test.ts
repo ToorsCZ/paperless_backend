@@ -20,6 +20,7 @@ import {
     importDocument,
     searchPbom,
     resolveScan,
+    printOrderDocuments,
     OrderUpdate,
 } from "../../services/workstationService";
 import { getDb, getNormsDb } from "../../config/database";
@@ -448,6 +449,40 @@ describe("Workstation Service", () => {
             expect(result).toHaveProperty("id", 1);
             expect(result).toHaveProperty("name", "test.pdf");
             expect(result).toHaveProperty("revisions");
+        });
+    });
+
+    describe("printOrderDocuments", () => {
+        it("prints whatever doc_manager has even when the order was already printed, and marks it printed", async () => {
+            (axios.get as jest.Mock).mockImplementation((_url: string, opts: any) =>
+                Promise.resolve(
+                    opts.params.document_type === 4 ?
+                        { status: 200, headers: { "content-disposition": 'filename="decl.pdf"' }, data: Buffer.from("%PDF") }
+                    :   { status: 404, headers: {}, data: Buffer.alloc(0) },
+                ),
+            );
+            const insert = jest.fn(() => ({ onConflict: () => ({ ignore: () => Promise.resolve() }) }));
+            const db = jest.fn((table: string) => {
+                // Already printed — the manual print must not care.
+                if (table === "document_print_log") return { where: () => ({ first: () => thenable({ id: 1 }) }), insert };
+                return {};
+            });
+            (getDb as jest.Mock).mockResolvedValue(db);
+
+            expect(await printOrderDocuments("PN-001", "01")).toBe(1);
+            await new Promise((r) => setImmediate(r)); // background print + log
+            expect(insert).toHaveBeenCalledWith(
+                expect.objectContaining({ project_number: "PN-001", position: "01" }),
+            );
+        });
+
+        it("returns 0 and prints nothing when doc_manager has no documents", async () => {
+            (axios.get as jest.Mock).mockResolvedValue({ status: 404, headers: {}, data: Buffer.alloc(0) });
+            const db = jest.fn();
+            (getDb as jest.Mock).mockResolvedValue(db);
+
+            expect(await printOrderDocuments("PN-001", "01")).toBe(0);
+            expect(db).not.toHaveBeenCalled();
         });
     });
 

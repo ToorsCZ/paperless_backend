@@ -7,6 +7,7 @@ import {
     importDocument,
     searchPbom,
     resolveScan,
+    printOrderDocuments,
     listAvailablePbomTypes,
     parseWorkstationSequence,
     getInFlightCyclesForOrder,
@@ -356,6 +357,25 @@ export const searchPbomHandler = async (req: Request, res: Response) => {
         res.json(await annotateWithLockStatus(results));
     } catch (error) {
         console.error("Error searching PBOM:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+/** Prints (or reprints) an order's doc_manager documentation — see printOrderDocuments. */
+export const printOrderDocumentsHandler = async (req: Request, res: Response) => {
+    const { projectNumber, position } = req.body;
+    if (!projectNumber || !position) {
+        return res.status(400).json({ error: "projectNumber and position are required" });
+    }
+    try {
+        const locked = await fetchLockedKeys([{ project_number: String(projectNumber), position: String(position) }]);
+        if (locked.size > 0) {
+            return res.status(409).json({ error: "Order is locked for printing" });
+        }
+        const found = await printOrderDocuments(String(projectNumber), String(position));
+        res.json({ found });
+    } catch (error) {
+        console.error("Error printing order documents:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 };
