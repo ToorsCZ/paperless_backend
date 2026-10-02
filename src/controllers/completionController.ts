@@ -20,11 +20,13 @@ import { closeOrderInToors } from "../services/toorsService";
 import { normalizeWorkplace } from "../utils/normalizeWorkplace";
 import { getOrderCycleSnapshot, motorCycleRange } from "../services/workstationService";
 import { completionWorkplaceForPbomType } from "../config/documentTypes";
+import { resolveHardwareOrders } from "../services/hardwareOrderLookupService";
 
 /**
  * Looks up the sales order number from ptl_prep_queue using project number
  * + position — avoids needing the mobile app to pass it through route params.
- * Returns null if not found (order not in the plan, or plan was pruned).
+ * Falls back to Norms (newest txtfiles row) when the order isn't in the
+ * plan (anymore). Returns null if neither knows it.
  */
 async function lookupSalesOrder(
     projectNumber: string,
@@ -36,7 +38,15 @@ async function lookupSalesOrder(
             .where({ project_number: projectNumber, position })
             .select("sales_order")
             .first();
-        return row?.sales_order ?? null;
+        if (row?.sales_order) return row.sales_order;
+
+        const norms = await getNormsDb();
+        const txtfile = await norms("txtfiles")
+            .where({ zakazka: projectNumber, pozice: position })
+            .orderBy("id", "desc")
+            .select("prodejni_objednavka")
+            .first();
+        return txtfile?.prodejni_objednavka ? String(txtfile.prodejni_objednavka) : null;
     } catch (err: any) {
         console.error(
             `[PREP] Could not look up sales order for ${projectNumber}/${position}: ${err.message}`,
@@ -90,6 +100,26 @@ async function lookupProductionOrderNumber(
         );
         return null;
     }
+}
+
+/**
+ * What a prep label prints for an order: sales order, production order and
+ * the number of doors. The newest PTL order file (HISTORY\OK, Hardware) is
+ * the authority for the door count — the app only knows it while the order
+ * is in the plan, and once a label was printed with a wrong count, its own
+ * preparation log would keep repeating it.
+ */
+async function resolvePrepOrder(projectNumber: string, position: string) {
+    const salesOrder = await lookupSalesOrder(projectNumber, position);
+    const productionOrderNumber = salesOrder
+        ? await lookupProductionOrderNumber(projectNumber, salesOrder, position)
+        : null;
+    const orderFile = salesOrder ? resolveHardwareOrders([{ salesOrder, position }]).get(`${salesOrder}::${position}`) : undefined;
+    return {
+        salesOrder,
+        productionOrderNumber: productionOrderNumber ?? orderFile?.productOrder ?? null,
+        doors: orderFile?.quantity ?? null,
+    };
 }
 
 export const getEmployees = async (req: Request, res: Response) => {
@@ -398,19 +428,14 @@ export const createPrepLabel = async (req: Request, res: Response) => {
         });
     }
 
+    // Look up sales order, production order number and door count on the
+    // backend — the mobile app doesn't need to carry them through route
+    // params. All fail open: if unavailable the label still prints, just
+    // without those fields / with the app's door count.
+    const { salesOrder, productionOrderNumber, doors } = await resolvePrepOrder(projectNumber, position);
     const cycles =
-        typeof totalCycles === "number" && totalCycles > 0 ?
-            Math.floor(totalCycles)
-        :   1;
-
-    // Look up both sales order and production order number on the backend —
-    // the mobile app doesn't need to carry either through route params.
-    // Both fail open: if unavailable the label still prints, just without
-    // those fields.
-    const salesOrder = await lookupSalesOrder(projectNumber, position);
-    const productionOrderNumber = salesOrder
-        ? await lookupProductionOrderNumber(projectNumber, salesOrder, position)
-        : null;
+        doors ??
+        (typeof totalCycles === "number" && totalCycles > 0 ? Math.floor(totalCycles) : 1);
 
     try {
         const pdfBuffer = buildPrepLabelPdf(
@@ -467,13 +492,16 @@ export const getPrepLabelStatus = async (req: Request, res: Response) => {
     }
     try {
         const original = await latestPrepLabel(projectNumber, position);
+        const { doors } = await resolvePrepOrder(projectNumber, position);
         res.json({
+            // Door count from the order file — what a print would use; null if unknown.
+            doors,
             printed:
                 original ?
                     {
                         employeeName: original.employee_name,
                         printedAt: original.created_at,
-                        totalCycles: original.total_cycles ?? 1,
+                        totalCycles: doors ?? original.total_cycles ?? 1,
                     }
                 :   null,
         });
@@ -486,8 +514,10 @@ export const getPrepLabelStatus = async (req: Request, res: Response) => {
 /**
  * Reprints chosen doors of an already printed prep label (e.g. the printer
  * ran out of ink halfway through a 20-door order). The labels match the
- * original print — same preparer, time and door count, taken from its
- * order_preparation_log rows — and nothing new is recorded.
+ * original print — same preparer and time, taken from its
+ * order_preparation_log rows — and nothing new is recorded. The door count
+ * is the order file's (see resolvePrepOrder), so a label first printed with
+ * a wrong count can be reprinted right.
  */
 export const reprintPrepLabel = async (req: Request, res: Response) => {
     const { projectNumber, position, cycles } = req.body;
@@ -500,16 +530,12 @@ export const reprintPrepLabel = async (req: Request, res: Response) => {
         if (!original) {
             return res.status(404).json({ error: "No prep label has been printed for this order yet" });
         }
-        const total = original.total_cycles ?? 1;
+        const { salesOrder, productionOrderNumber, doors: orderDoors } = await resolvePrepOrder(projectNumber, position);
+        const total = orderDoors ?? original.total_cycles ?? 1;
         const doors = [...new Set(cycles.map(Number))].sort((a, b) => a - b);
         if (doors.some((c) => !Number.isInteger(c) || c < 1 || c > total)) {
             return res.status(400).json({ error: `cycles must be between 1 and ${total}` });
         }
-
-        const salesOrder = await lookupSalesOrder(projectNumber, position);
-        const productionOrderNumber = salesOrder
-            ? await lookupProductionOrderNumber(projectNumber, salesOrder, position)
-            : null;
         const pdfBuffer = buildPrepLabelPdf(
             projectNumber,
             position,

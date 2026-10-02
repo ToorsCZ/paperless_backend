@@ -57,6 +57,9 @@ export interface HardwareOrderInfo {
     // them up automatically. Empty when every item is a known PTL part, or
     // when the file has no items.
     nonPtlItems: OrderFileItem[];
+    // How many doors the production order is for — the prep label prints
+    // one label per door. Null when the file has no usable quantity.
+    quantity: number | null;
 }
 
 /** Extracts "Indy" out of `"Hardware (Indy)"`. Falls back to the raw id. */
@@ -160,6 +163,7 @@ function readHardwareOrderFile(filePath: string, productOrderFromName: string): 
         const parsed = JSON.parse(raw) as {
             id?: string;
             productOrder?: string;
+            quantity?: number | string;
             items?: OrderFileItem[];
         };
         const items = parsed.items || [];
@@ -174,6 +178,7 @@ function readHardwareOrderFile(filePath: string, productOrderFromName: string): 
             productOrder: parsed.productOrder || productOrderFromName,
             hardwareType: parseHardwareType(parsed.id),
             nonPtlItems,
+            quantity: Number(parsed.quantity) >= 1 ? Math.floor(Number(parsed.quantity)) : null,
         };
     } catch (err: any) {
         console.error(`[HARDWARE] Could not read/parse ${path.basename(filePath)}: ${err.message}`);
