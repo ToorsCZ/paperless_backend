@@ -69,6 +69,9 @@ async function lookupProductionOrderNumber(
                 prodejni_objednavka: salesOrder,
                 pozice: position,
             })
+            // An order re-released in Norms gets a second txtfiles row (with a
+            // new vyr_obj) — the newest one is the live production order.
+            .orderBy("id", "desc")
             .select("id")
             .first();
 
