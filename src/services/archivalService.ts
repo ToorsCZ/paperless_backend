@@ -592,14 +592,19 @@ async function archiveOrder(
             const outputPath = path.join(orderDir, outputFilename);
 
             if (dmsDir) {
-                // The DMS app picks up whatever lands in its folder, so it
-                // must never see a half-written PDF: convert locally, copy
-                // under a temporary name, then rename into place.
+                // The DMS app picks up every file in its folder, and only
+                // finished PDFs may ever land there: build the PDF/A locally
+                // (Ghostscript writes slowly), then copy the finished file in
+                // in one go. A copy that fails halfway is removed.
                 const tmpOutputPath = path.join(os.tmpdir(), `archive-out-${crypto.randomBytes(8).toString("hex")}.pdf`);
                 try {
                     await convertToPdfA(tmpInputPath, tmpOutputPath, { title: doc.filename });
-                    fs.copyFileSync(tmpOutputPath, `${outputPath}.part`);
-                    fs.renameSync(`${outputPath}.part`, outputPath);
+                    try {
+                        fs.copyFileSync(tmpOutputPath, outputPath);
+                    } catch (err) {
+                        fs.rmSync(outputPath, { force: true });
+                        throw err;
+                    }
                 } finally {
                     fs.unlink(tmpOutputPath, () => {});
                 }

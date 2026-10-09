@@ -58,8 +58,8 @@ hardware labels/QR stickers, and pushes live updates over Socket.IO.
   PDFs to PDF/A, stamps the production record (preparation, completion,
   check and QC per cycle, in Czech) and archives them to a network share
   (`archivalService.ts`). Guardy orders go flat into the DMS scan folder
-  (`ARCHIVE_GUARDY_PATH`) instead, written under a temporary name and
-  renamed so the DMS app never picks up a half-written file.
+  (`ARCHIVE_GUARDY_PATH`) instead — only finished PDFs, built locally and
+  copied in under their final name, nothing else.
 - **Document printing** — renders PDFs with Ghostscript and sends them to a
   network printer (`documentPrinterService.ts`). A live switch
   (`/settings/printing`) turns printing on/off without a restart.

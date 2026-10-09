@@ -22,7 +22,6 @@ jest.mock("fs", () => {
         ...actual,
         writeFileSync: jest.fn(),
         copyFileSync: jest.fn(),
-        renameSync: jest.fn(),
         unlink: jest.fn((_path: string, cb: (err: any) => void) => cb(null)),
     };
 });
@@ -195,7 +194,7 @@ describe("archivalService", () => {
         );
     });
 
-    it("archives a Guardy order flat into the DMS scan folder, never showing it a half-written file", async () => {
+    it("archives a Guardy order flat into the DMS scan folder, copying in only the finished PDF", async () => {
         const row = {
             id: 9,
             order_id: "order-9",
@@ -229,8 +228,9 @@ describe("archivalService", () => {
         await runArchivalSweep();
 
         const finalPath = require("path").join("/tmp/test-dms-scan", "KM-SVM_G1_20.pdf");
-        expect(fs.copyFileSync).toHaveBeenCalledWith(expect.any(String), `${finalPath}.part`);
-        expect(fs.renameSync).toHaveBeenCalledWith(`${finalPath}.part`, finalPath);
+        // Only the final .pdf ever lands there — no temporary names.
+        expect(fs.copyFileSync).toHaveBeenCalledTimes(1);
+        expect(fs.copyFileSync).toHaveBeenCalledWith(expect.stringMatching(/\.pdf$/), finalPath);
         // Converted somewhere else first, not straight into the scanned folder.
         expect((convertToPdfA as jest.Mock).mock.calls[0][1]).not.toContain("test-dms-scan");
     });
