@@ -15,6 +15,7 @@ import {
     DOCUMENT_TYPES,
 } from "../config/documentTypes";
 import { convertToPdfA, PdfaConversionError } from "./pdfaService";
+import { resolveHardwareOrders } from "./hardwareOrderLookupService";
 
 // Network share where archived PDF/A copies are written, e.g.
 //   \\FILESERVER\Archive          (Windows UNC)
@@ -22,6 +23,9 @@ import { convertToPdfA, PdfaConversionError } from "./pdfaService";
 // Required — if unset, the sweep logs a warning and does nothing rather than
 // silently writing archives somewhere unexpected.
 const ARCHIVE_SHARE_PATH = process.env.ARCHIVE_SHARE_PATH || "";
+// Guardy orders go here instead — flat, no subfolders: the folder the DMS
+// app scans and ingests from. Empty = Guardy archives like everything else.
+const ARCHIVE_GUARDY_PATH = process.env.ARCHIVE_GUARDY_PATH || "";
 
 // How many days after an order is tagged "Complete" (via the workstation
 // kiosk's completion confirmation) it becomes eligible for archival.
@@ -152,6 +156,29 @@ function archivePositionFor(documentType: number, position: string): string {
     if (documentType !== DOCUMENT_TYPES.PBOM_MOTOR) return position;
     const n = parseInt(position, 10);
     return Number.isNaN(n) ? position : String(n + 1);
+}
+
+/**
+ * Is this a Guardy order? Read from its PTL order file ("Hardware (Guardy)",
+ * newest file wins — see hardwareOrderLookupService), falling back to the
+ * hardware family stored on its prep-queue row.
+ */
+async function isGuardyOrder(row: ArchiveLogRow): Promise<boolean> {
+    let hardwareType = row.sales_order
+        ? resolveHardwareOrders([{ salesOrder: row.sales_order, position: row.position }]).get(
+              `${row.sales_order}::${row.position}`,
+          )?.hardwareType
+        : null;
+    if (!hardwareType) {
+        const db = await getDb();
+        const queueRow = await db("ptl_prep_queue")
+            .where({ project_number: row.project_number, position: row.position })
+            .whereNotNull("hardware_type")
+            .select("hardware_type")
+            .first();
+        hardwareType = queueRow?.hardware_type ?? null;
+    }
+    return hardwareType?.toLowerCase() === "guardy";
 }
 
 const QC_ISSUE_MARK = "(!)";
@@ -500,6 +527,7 @@ export async function appendCycleInfoPage(
  * workplaces it passed through), fetches that PBOM from doc_manager,
  * converts it to real PDF/A, and writes it to
  * ARCHIVE_SHARE_PATH/{projectNumber}/{position}/KM-SVM_{salesOrder}_{archivePosition}.pdf
+ * — or, for a Guardy order, flat into ARCHIVE_GUARDY_PATH (the DMS scan folder)
  * (see archivePositionFor for the Hardware/Motor position offset).
  *
  * Only PBOM documents are archived — declarations, drawings, confirmations,
@@ -512,11 +540,10 @@ export async function appendCycleInfoPage(
 async function archiveOrder(
     row: ArchiveLogRow,
 ): Promise<{ archivedCount: number; attemptedCount: number }> {
-    const orderDir = path.join(
-        ARCHIVE_SHARE_PATH,
-        row.project_number,
-        row.position,
-    );
+    // Guardy orders go flat into the folder the DMS app scans (see
+    // isGuardyOrder); everything else into {project}/{position} folders.
+    const dmsDir = ARCHIVE_GUARDY_PATH && (await isGuardyOrder(row)) ? ARCHIVE_GUARDY_PATH : null;
+    const orderDir = dmsDir ?? path.join(ARCHIVE_SHARE_PATH, row.project_number, row.position);
     let archivedCount = 0;
 
     const pbomTypes = await getPbomTypesForOrder(row.order_id);
@@ -564,9 +591,23 @@ async function archiveOrder(
             const outputFilename = `KM-SVM_${row.sales_order}_${archivePositionFor(documentType, row.position)}.pdf`;
             const outputPath = path.join(orderDir, outputFilename);
 
-            await convertToPdfA(tmpInputPath, outputPath, {
-                title: doc.filename,
-            });
+            if (dmsDir) {
+                // The DMS app picks up whatever lands in its folder, so it
+                // must never see a half-written PDF: convert locally, copy
+                // under a temporary name, then rename into place.
+                const tmpOutputPath = path.join(os.tmpdir(), `archive-out-${crypto.randomBytes(8).toString("hex")}.pdf`);
+                try {
+                    await convertToPdfA(tmpInputPath, tmpOutputPath, { title: doc.filename });
+                    fs.copyFileSync(tmpOutputPath, `${outputPath}.part`);
+                    fs.renameSync(`${outputPath}.part`, outputPath);
+                } finally {
+                    fs.unlink(tmpOutputPath, () => {});
+                }
+            } else {
+                await convertToPdfA(tmpInputPath, outputPath, {
+                    title: doc.filename,
+                });
+            }
 
             console.log(
                 `[ARCHIVE] Wrote ${outputPath} for order ${row.order_id}`,
