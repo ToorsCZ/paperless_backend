@@ -142,20 +142,20 @@ async function getPbomTypesForOrder(orderId: string): Promise<number[]> {
 }
 
 /**
- * The archival upload service auto-ingests files matching
- * "KM-SVM_<salesOrder>_<position>.pdf" — no document-type token in the
- * name, so Hardware and Motor PBOMs for the SAME real position would
- * otherwise collide on one filename. Motor's archived copy uses
- * position+1 instead, so it always encodes to a distinct name (e.g.
- * position "10" -> Hardware archives as "..._10.pdf", Motor as
- * "..._11.pdf") — this only affects the archived FILENAME, not the real
- * position used to fetch the document from doc_manager or the folder it's
- * written into.
+ * The DMS scan import (dokumenty_sken) files a PDF named
+ * "SVM_<salesOrder>_<position, 3 digits>.pdf" under the order's
+ * "Výrobní vychystání materiálu - po výrobě" at that position; any other
+ * name is silently dropped. There's no document-type token in the name, so
+ * Hardware and Motor PBOMs for the SAME real position would collide —
+ * Motor's copy uses position+1 instead (position "10" -> Hardware
+ * "SVM_…_010.pdf", Motor "SVM_…_011.pdf"), the way DMS lists them. This
+ * only affects the archived FILENAME, not the real position used to fetch
+ * the document from doc_manager or the folder it's written into.
  */
-function archivePositionFor(documentType: number, position: string): string {
-    if (documentType !== DOCUMENT_TYPES.PBOM_MOTOR) return position;
+export function archiveFilename(salesOrder: string | null, documentType: number, position: string): string {
     const n = parseInt(position, 10);
-    return Number.isNaN(n) ? position : String(n + 1);
+    const pos = Number.isNaN(n) ? position : String(documentType === DOCUMENT_TYPES.PBOM_MOTOR ? n + 1 : n).padStart(3, "0");
+    return `SVM_${salesOrder}_${pos}.pdf`;
 }
 
 /**
@@ -526,9 +526,9 @@ export async function appendCycleInfoPage(
  * order (see getPbomTypesForOrder — derived from which real production
  * workplaces it passed through), fetches that PBOM from doc_manager,
  * converts it to real PDF/A, and writes it to
- * ARCHIVE_SHARE_PATH/{projectNumber}/{position}/KM-SVM_{salesOrder}_{archivePosition}.pdf
+ * ARCHIVE_SHARE_PATH/{projectNumber}/{position}/SVM_{salesOrder}_{position:000}.pdf
  * — or, for a Guardy order, flat into ARCHIVE_GUARDY_PATH (the DMS scan folder)
- * (see archivePositionFor for the Hardware/Motor position offset).
+ * (see archiveFilename for the naming and the Hardware/Motor offset).
  *
  * Only PBOM documents are archived — declarations, drawings, confirmations,
  * etc. are intentionally not part of retention archival.
@@ -588,7 +588,7 @@ async function archiveOrder(
         fs.writeFileSync(tmpInputPath, bufferToArchive);
 
         try {
-            const outputFilename = `KM-SVM_${row.sales_order}_${archivePositionFor(documentType, row.position)}.pdf`;
+            const outputFilename = archiveFilename(row.sales_order, documentType, row.position);
             const outputPath = path.join(orderDir, outputFilename);
 
             if (dmsDir) {

@@ -148,7 +148,7 @@ describe("archivalService", () => {
         );
     });
 
-    it("names archived files KM-SVM_<salesOrder>_<position>, bumping position by 1 for Motor so it never collides with Hardware's", async () => {
+    it("names archived files SVM_<salesOrder>_<3-digit position> (the DMS scan naming), bumping position by 1 for Motor", async () => {
         const row = {
             id: 4,
             order_id: "order-4",
@@ -188,8 +188,8 @@ describe("archivalService", () => {
         const outputPaths = (convertToPdfA as jest.Mock).mock.calls.map((call) => call[1]);
         expect(outputPaths).toEqual(
             expect.arrayContaining([
-                expect.stringContaining(`KM-SVM_604473_10.pdf`),
-                expect.stringContaining(`KM-SVM_604473_11.pdf`),
+                expect.stringContaining(`SVM_604473_010.pdf`),
+                expect.stringContaining(`SVM_604473_011.pdf`),
             ]),
         );
     });
@@ -227,7 +227,7 @@ describe("archivalService", () => {
 
         await runArchivalSweep();
 
-        const finalPath = require("path").join("/tmp/test-dms-scan", "KM-SVM_G1_20.pdf");
+        const finalPath = require("path").join("/tmp/test-dms-scan", "SVM_G1_020.pdf");
         // Only the final .pdf ever lands there — no temporary names.
         expect(fs.copyFileSync).toHaveBeenCalledTimes(1);
         expect(fs.copyFileSync).toHaveBeenCalledWith(expect.stringMatching(/\.pdf$/), finalPath);
