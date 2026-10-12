@@ -528,15 +528,15 @@ export const getDocumentsOverview = async (req: Request, res: Response) => {
                     .andOn("ocl.workstation", "lc_max.workstation")
                     .andOn("ocl.created_at", "lc_max.max_created_at");
             })
-            // Not archived yet. A project/position can have more than one
-            // order_archive_log row (e.g. two Motor cycles sharing the same
-            // position) — whereNotExists rather than a join avoids fanning
-            // that out into duplicate result rows.
+            // Not archived yet — THIS workstation's order, not just anything
+            // at the project/position: Hardware and Motor are separate
+            // orders, archived 7 days after each finishes, so a Motor part
+            // archived today must not hide the Hardware part completed
+            // today. order_archive_log.order_id is unique per order.
             .whereNotExists(function (this: any) {
                 this.select(1)
                     .from("order_archive_log as oal")
-                    .whereRaw("oal.project_number = ocl.project_number")
-                    .andWhereRaw("oal.position = ocl.position")
+                    .whereRaw("oal.order_id = ocl.order_id")
                     .whereNotNull("oal.archived_at");
             })
             .select(
