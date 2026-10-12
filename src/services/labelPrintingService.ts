@@ -1249,10 +1249,11 @@ export function extractDoorNumber(packageType: string): number | null {
  *
  * Confirmed behaviour: every door prints its own labels during its own
  * cycle — there is no batching to the first/last cycle. Each row's door
- * number is read from packageType (col 4) via extractDoorNumber, e.g.:
- *   "Sektion 2/2"   → door 2
- *   "V - 1/2"       → door 1
- *   "Tormatic 2/2"  → door 2
+ * is found by doorForRow (the door named in col 3, else box N of M split
+ * evenly over the doors), e.g. with 3 doors:
+ *   "section 2/3"            → door 2
+ *   col 3 "3", "rail 2/2"    → door 3
+ *   "hardware 7/15"          → door 2 (5 boxes per door)
  *
  * A row prints when its door number matches cycleIndex. This takes
  * priority over the type's cycleFilter — e.g. a "*_hw_kr" type configured
@@ -1298,6 +1299,31 @@ function getCycleFilter(labelType: string): CycleFilter {
     return resolveConfig(labelType).cycleFilter;
 }
 
+/**
+ * Which door (cycle) a box belongs to:
+ *  1. packagePart (col 3) names the door(s) — "1", "3", "1 -  2" for
+ *     sections and rails. A box shared by several doors ("1 -  2") prints
+ *     with the first of them.
+ *  2. Otherwise packageType's "N/M" is box N of M for the whole order,
+ *     split evenly over the doors: door = floor((N-1)·doors / M) + 1.
+ *     "hardware 1..15/15" with 3 doors → 5 boxes per door; M = doors gives
+ *     N itself ("section 2/3" → door 2); 2 struts for 3 doors → doors 1, 2.
+ * null when neither says anything (falls back to the type's cycleFilter).
+ */
+export function doorForRow(row: LabelRow, totalCycles: number): number | null {
+    const named = /^\s*(\d+)/.exec(row.packagePart);
+    if (named) {
+        const door = parseInt(named[1]!, 10);
+        if (door >= 1 && door <= totalCycles) return door;
+    }
+    const nm = /(\d+)\s*\/\s*(\d+)\s*$/.exec(row.packageType.trim());
+    if (!nm) return null;
+    const n = parseInt(nm[1]!, 10);
+    const m = parseInt(nm[2]!, 10);
+    if (n < 1 || m < 1 || n > m) return null;
+    return Math.floor(((n - 1) * totalCycles) / m) + 1;
+}
+
 export function selectRowsForCycle(
     labelRows: LabelRow[],
     cycleIndex: number,
@@ -1310,7 +1336,7 @@ export function selectRowsForCycle(
     // door number, and must not drop boxes 2..M.
     if (totalCycles <= 1) return labelRows;
     return labelRows.filter((row) => {
-        const doorNumber = extractDoorNumber(row.packageType);
+        const doorNumber = doorForRow(row, totalCycles);
         if (doorNumber !== null) return doorNumber === cycleIndex;
         const cf = getCycleFilter(row.labelType);
         if (cf === "first") return isFirstCycle;
