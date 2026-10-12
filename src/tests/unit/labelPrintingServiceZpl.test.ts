@@ -20,7 +20,7 @@ jest.mock("fs", () => {
     };
 });
 
-import { generateZpl, LabelRow } from "../../services/labelPrintingService";
+import { generateEzpl, generateZpl, LabelRow } from "../../services/labelPrintingService";
 
 const baseRow: LabelRow = {
     labelType: "section",
@@ -119,5 +119,33 @@ describe("generateZpl — outside-EU addendum", () => {
         const zpl = generateZpl(nonEu, "aktualniCMD", DPI).toString("ascii");
         expect((zpl.match(/\^XA/g) ?? []).length).toBe(2);
         expect(zpl).toContain("OUTSIDE EU");
+    });
+});
+
+describe("project number on the delivery labels", () => {
+    const nonEu = { ...baseRow, countryAddress: "US New York" };
+    // Same font and size as the sales order line (E, 2x2), in the top-right box.
+    const salesOrderSize = (zpl: string) => zpl.match(/\^FO22,164(\^A0N,\d+,\d+)/)?.[1];
+
+    it("prints the 6-digit project number (no Z) on the full and outside-EU labels, sized like the sales order", () => {
+        const zpl = generateZpl(nonEu, "aktualniCMD", DPI).toString("ascii");
+        const size = salesOrderSize(zpl);
+        expect(size).toBeTruthy();
+        expect(zpl.split(`^FO260,38${size}^FD253065^FS`)).toHaveLength(3); // twice
+        expect(zpl).not.toContain("Z253065");
+
+        const ezpl = generateEzpl(nonEu, "aktualniCMD").toString("latin1");
+        expect(ezpl.match(/AE,260,38,2,2,0,0,253065/g)).toHaveLength(2);
+    });
+
+    it("leaves the simple label as it was (it already has 253065_020)", () => {
+        expect(generateZpl(baseRow, "aktualniCMDinter", DPI).toString("ascii")).not.toContain("^FO260,38");
+        expect(generateEzpl(baseRow, "aktualniCMDinter").toString("latin1")).not.toContain("AE,260,38");
+    });
+
+    it("skips the line when the CSV has no project number", () => {
+        const none = { ...baseRow, orderNumber: "" };
+        expect(generateZpl(none, "aktualniCMD", DPI).toString("ascii")).not.toContain("^FO260,38");
+        expect(generateEzpl(none, "aktualniCMD").toString("latin1")).not.toContain("AE,260,38");
     });
 });

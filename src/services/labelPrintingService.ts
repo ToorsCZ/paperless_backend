@@ -614,6 +614,17 @@ function ezplHeader(): string {
 }
 
 /**
+ * The project number ("Z253065" in the CSV's cisloZakazky → "253065"),
+ * printed on the full and outside-EU labels in the empty top-right box,
+ * same font and size as the sales order.
+ */
+const PROJECT_X = 260;
+const PROJECT_Y = 38;
+function projectNumber(label: LabelRow): string {
+    return label.orderNumber.trim().replace(/^Z/i, "");
+}
+
+/**
  * SIMPLE sticker — no barcodes, no delivery address (aktualniCMDinter template).
  * Field positions from sheet7 of hardware.xlsm, confirmed against real Excel .prn output.
  */
@@ -694,6 +705,7 @@ function generatePrimaryBlock(label: LabelRow): string {
         `AE,5,414,1,1,0,0,${custNum}`,
         `AE,151,413,1,1,0,0,${ezplValue(label.packagePart)}`,
         `AE,58,38,2,2,0,0,${cc}`,
+        ...(projectNumber(label) ? [`AE,${PROJECT_X},${PROJECT_Y},2,2,0,0,${ezplValue(projectNumber(label))}`] : []),
         "E",
     ].join("\n");
 }
@@ -730,6 +742,7 @@ function generateOutsideEuBlock(label: LabelRow): string {
         `AF,7,893,1,1,0,0,${ezplValue(cName1)}`,
         "", // blank line — present in VBA rows 48-86 template output
         `AE,58,38,2,2,0,0,${cc}`,
+        ...(projectNumber(label) ? [`AE,${PROJECT_X},${PROJECT_Y},2,2,0,0,${ezplValue(projectNumber(label))}`] : []),
         "E",
     ].join("\n");
 }
@@ -946,6 +959,7 @@ function generatePrimaryBlockZpl(label: LabelRow, dpi: number): string {
         zplText("E", 5, 414, 1, 1, custNum, dpi),
         zplText("E", 151, 413, 1, 1, label.packagePart, dpi),
         zplText("E", 58, 38, 2, 2, cc, dpi),
+        zplText("E", PROJECT_X, PROJECT_Y, 2, 2, projectNumber(label), dpi),
         "^XZ",
     ].join("\n");
 }
@@ -972,6 +986,7 @@ function generateOutsideEuBlockZpl(label: LabelRow, dpi: number): string {
         zplText("B", 11, 741, 2, 2, label.countryAddress, dpi),
         zplText("F", 7, 893, 1, 1, cName1, dpi),
         zplText("E", 58, 38, 2, 2, cc, dpi),
+        zplText("E", PROJECT_X, PROJECT_Y, 2, 2, projectNumber(label), dpi),
         "^XZ",
     ].join("\n");
 }
