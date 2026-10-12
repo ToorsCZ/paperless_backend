@@ -7,6 +7,7 @@ import {
     importPbom,
     searchPbomHandler,
     printOrderDocumentsHandler,
+    reprintOrderLabels,
     resolveScanHandler,
     listPbomTypesHandler,
     saveEdited,
@@ -36,6 +37,8 @@ router.get("/search-pbom", searchPbomHandler);
 // Manual (re)print of the order documentation (DOCUMENTS_TYPES), even if
 // already printed — see printOrderDocuments.
 router.post("/print-documents", printOrderDocumentsHandler);
+// Admin: print an order's missing box labels again (see reprintOrderLabels).
+router.post("/reprint-labels", adminPinAuth, reprintOrderLabels);
 router.get("/resolve-scan", resolveScanHandler);
 router.get("/pbom-types", listPbomTypesHandler);
 router.post("/order-completion", createOrderCompletion);

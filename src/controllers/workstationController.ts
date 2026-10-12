@@ -14,6 +14,7 @@ import {
     PbomSearchResult,
 } from "../services/workstationService";
 import { editedPdfDirForType } from "../config/documentTypes";
+import { handleLabelPrinting, getTriggerForWorkplace } from "../services/labelPrintingService";
 import path from "path";
 import fs from "fs";
 import axios from "axios";
@@ -357,6 +358,59 @@ export const searchPbomHandler = async (req: Request, res: Response) => {
         res.json(await annotateWithLockStatus(results));
     } catch (error) {
         console.error("Error searching PBOM:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+/**
+ * Admin: prints an order's missing box labels again. P2L only signals a
+ * door once, so a label that didn't print then (printer out, a bug in the
+ * door split) never would. This replays the label printing for every door
+ * of the order that has already started, from the order data logged with
+ * that start: labels already in label_print_log are skipped, so only the
+ * missing ones print. Labels only — no QR sticker, documentation or
+ * workstation state.
+ */
+export const reprintOrderLabels = async (req: Request, res: Response) => {
+    const { salesOrder, position, workplace = "Hardware" } = req.body;
+    if (!salesOrder || !position) {
+        return res.status(400).json({ error: "salesOrder and position are required" });
+    }
+    try {
+        const db = await getDb();
+        const starts = await db("workstation_log")
+            .whereRaw("order_snapshot::json->>'salesOrder' = ?", [String(salesOrder)])
+            .andWhereRaw("ltrim(order_snapshot::json->>'position', '0') = ltrim(?, '0')", [String(position)])
+            .andWhere("workstation_name", workplace)
+            .orderBy("id", "desc")
+            .select("order_snapshot", "cycle_index", "total_cycles");
+        // The latest logged event of each door that has started.
+        const byCycle = new Map<number, (typeof starts)[number]>();
+        for (const s of starts) if (!byCycle.has(s.cycle_index)) byCycle.set(s.cycle_index, s);
+        if (byCycle.size === 0) {
+            return res.status(404).json({ error: `No ${workplace} cycle of ${salesOrder}/${position} has started yet` });
+        }
+
+        const cycles = [...byCycle.keys()].sort((a, b) => a - b);
+        for (const cycle of cycles) {
+            const s = byCycle.get(cycle)!;
+            const order = JSON.parse(s.order_snapshot);
+            console.log(`[LABELS] Manual reprint of ${salesOrder}/${position} ${workplace} cycle ${cycle}/${s.total_cycles}`);
+            await handleLabelPrinting(
+                {
+                    order,
+                    cycleIndex: cycle,
+                    totalCycles: s.total_cycles,
+                    _id: `reprint:${order._id}:${cycle}`,
+                    datetime: new Date().toISOString(),
+                    action: getTriggerForWorkplace(order.workplace) as OrderUpdate["action"],
+                },
+                { qrSticker: false },
+            );
+        }
+        res.json({ cycles });
+    } catch (error) {
+        console.error("Error reprinting labels:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 };

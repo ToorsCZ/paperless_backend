@@ -203,7 +203,7 @@ const LABEL_PRINT_TRIGGER = process.env.LABEL_PRINT_TRIGGER || "STARTED";
  * Returns the print trigger (STARTED | FINISHED) for a given workplace,
  * falling back to the global LABEL_PRINT_TRIGGER.
  */
-function getTriggerForWorkplace(workplace: string): string {
+export function getTriggerForWorkplace(workplace: string): string {
     const key = `LABEL_TRIGGER_${workplace.toUpperCase().replace(/\s+/g, "_")}`;
     return process.env[key] || LABEL_PRINT_TRIGGER;
 }
@@ -1384,7 +1384,12 @@ export function selectMotorBatchRows(
 
 // ─── main export ─────────────────────────────────────────────────────────────
 
-export async function handleLabelPrinting(update: OrderUpdate): Promise<void> {
+export async function handleLabelPrinting(
+    update: OrderUpdate,
+    // qrSticker: false for a manual reprint — QR stickers have no print log,
+    // so replaying a cycle would print its QR sticker a second time.
+    options: { qrSticker?: boolean } = {},
+): Promise<void> {
     const workplaceTrigger = getTriggerForWorkplace(update.order.workplace);
     if (update.action !== workplaceTrigger) {
         console.log(
@@ -1604,7 +1609,7 @@ export async function handleLabelPrinting(update: OrderUpdate): Promise<void> {
 
     // QR sticker – last cycle only, mirrors TiskQRKodu
     try {
-        await handleQrSticker(update, labelRows);
+        if (options.qrSticker !== false) await handleQrSticker(update, labelRows);
     } catch (err: any) {
         console.error(`[QR] Error: ${err.message}`);
     }

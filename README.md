@@ -174,6 +174,7 @@ headers, never in bodies, because request bodies are logged.
 | POST   | `/workstations/order-completion`  | Record a cycle's completion status (kiosk); `complete` closes it in the ERP     |
 | GET    | `/workstations/completion-queue`  | Finished cycles still waiting for a completion (kiosk backlog)                  |
 | POST   | `/workstations/manual-completion` | **admin** — complete a cycle outside P2L (non-`complete` statuses only)         |
+| POST   | `/workstations/reprint-labels`    | **admin** — print an order's missing box labels again (started doors only, no QR)   |
 | POST   | `/workstations/order-check`       | Record a standard check of a finished cycle                                     |
 | POST   | `/workstations/qc-check/verify`   | Verify a quality engineer's PIN (`X-QC-Pin`), with lockout                      |
 | POST   | `/workstations/order-qc-check`    | Record a QC sign-off (`X-QC-Pin`); a problem sends the cycle to "awaiting fix"  |
