@@ -614,14 +614,16 @@ function ezplHeader(): string {
 }
 
 /**
- * The project number ("Z253065" in the CSV's cisloZakazky → "253065"),
+ * The project number as "Z253065" (the Z tells it apart from the sales
+ * order; the CSV's cisloZakazky usually has it already, added if not),
  * printed on the full and outside-EU labels in the empty top-right box,
  * same font and size as the sales order.
  */
 const PROJECT_X = 260;
 const PROJECT_Y = 38;
 function projectNumber(label: LabelRow): string {
-    return label.orderNumber.trim().replace(/^Z/i, "");
+    const digits = label.orderNumber.trim().replace(/^Z/i, "");
+    return digits ? `Z${digits}` : "";
 }
 
 /**

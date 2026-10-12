@@ -127,15 +127,20 @@ describe("project number on the delivery labels", () => {
     // Same font and size as the sales order line (E, 2x2), in the top-right box.
     const salesOrderSize = (zpl: string) => zpl.match(/\^FO22,164(\^A0N,\d+,\d+)/)?.[1];
 
-    it("prints the 6-digit project number (no Z) on the full and outside-EU labels, sized like the sales order", () => {
+    it("prints the project number as Z253065 on the full and outside-EU labels, sized like the sales order", () => {
         const zpl = generateZpl(nonEu, "aktualniCMD", DPI).toString("ascii");
         const size = salesOrderSize(zpl);
         expect(size).toBeTruthy();
-        expect(zpl.split(`^FO260,38${size}^FD253065^FS`)).toHaveLength(3); // twice
-        expect(zpl).not.toContain("Z253065");
+        expect(zpl.split(`^FO260,38${size}^FDZ253065^FS`)).toHaveLength(3); // twice
+        expect(zpl).not.toContain("ZZ253065");
 
         const ezpl = generateEzpl(nonEu, "aktualniCMD").toString("latin1");
-        expect(ezpl.match(/AE,260,38,2,2,0,0,253065/g)).toHaveLength(2);
+        expect(ezpl.split("AE,260,38,2,2,0,0,Z253065\n")).toHaveLength(3); // twice
+    });
+
+    it("adds the Z when the CSV's project number comes without it", () => {
+        const zpl = generateZpl({ ...baseRow, orderNumber: "253065" }, "aktualniCMD", DPI).toString("ascii");
+        expect(zpl).toContain("^FDZ253065^FS");
     });
 
     it("leaves the simple label as it was (it already has 253065_020)", () => {
