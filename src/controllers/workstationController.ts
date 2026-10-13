@@ -363,52 +363,104 @@ export const searchPbomHandler = async (req: Request, res: Response) => {
 };
 
 /**
- * Admin: prints an order's missing box labels again. P2L only signals a
- * door once, so a label that didn't print then (printer out, a bug in the
- * door split) never would. This replays the label printing for every door
- * of the order that has already started, from the order data logged with
- * that start: labels already in label_print_log are skipped, so only the
- * missing ones print. Labels only — no QR sticker, documentation or
- * workstation state.
+ * The doors (cycles) of an order that have started at a workplace, each with
+ * the order data logged with its latest start — what a label reprint is
+ * replayed from — and how many label prints are logged for it.
+ */
+async function startedDoors(salesOrder: string, position: string, workplace: string) {
+    const db = await getDb();
+    const starts = await db("workstation_log")
+        .whereRaw("order_snapshot::json->>'salesOrder' = ?", [salesOrder])
+        .andWhereRaw("ltrim(order_snapshot::json->>'position', '0') = ltrim(?, '0')", [position])
+        .andWhere("workstation_name", workplace)
+        .orderBy("id", "desc")
+        .select("order_snapshot", "cycle_index", "total_cycles", "created_at");
+    const byCycle = new Map<number, (typeof starts)[number]>();
+    for (const s of starts) if (!byCycle.has(s.cycle_index)) byCycle.set(s.cycle_index, s);
+
+    const doors = [];
+    for (const cycle of [...byCycle.keys()].sort((a, b) => a - b)) {
+        const s = byCycle.get(cycle)!;
+        const order = JSON.parse(s.order_snapshot);
+        const log = await db("label_print_log")
+            .where({ order_id: order._id, cycle_index: cycle })
+            .count("* as n")
+            .max("printed_at as last")
+            .first();
+        doors.push({
+            cycle,
+            totalCycles: s.total_cycles as number,
+            startedAt: s.created_at,
+            printed: Number(log?.n ?? 0),
+            lastPrintedAt: log?.last ?? null,
+            order,
+        });
+    }
+    return doors;
+}
+
+const publicDoor = ({ order: _order, ...door }: Awaited<ReturnType<typeof startedDoors>>[number]) => door;
+
+/** Admin: which doors of an order started, and how many labels each printed. */
+export const getOrderLabelStatus = async (req: Request, res: Response) => {
+    const { salesOrder, position, workplace = "Hardware" } = req.query;
+    if (typeof salesOrder !== "string" || typeof position !== "string") {
+        return res.status(400).json({ error: "salesOrder and position are required" });
+    }
+    try {
+        const doors = await startedDoors(salesOrder.trim(), position.trim(), String(workplace));
+        res.json({ doors: doors.map(publicDoor) });
+    } catch (error) {
+        console.error("Error reading label status:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+/**
+ * Admin: prints an order's box labels again, for doors that have already
+ * started (P2L only signals a door once). Replayed from the order data
+ * logged with that start, reading the CURRENT CSV:
+ *  - default: labels already in label_print_log are skipped, so only the
+ *    missing ones print (printer was out, the old door split);
+ *  - force: every label of the chosen doors prints again (the CSV changed).
+ * `cycles` limits it to those doors. Labels only — no QR sticker,
+ * documentation or workstation state.
  */
 export const reprintOrderLabels = async (req: Request, res: Response) => {
-    const { salesOrder, position, workplace = "Hardware" } = req.body;
+    const { salesOrder, position, workplace = "Hardware", force = false, cycles } = req.body;
     if (!salesOrder || !position) {
         return res.status(400).json({ error: "salesOrder and position are required" });
     }
     try {
-        const db = await getDb();
-        const starts = await db("workstation_log")
-            .whereRaw("order_snapshot::json->>'salesOrder' = ?", [String(salesOrder)])
-            .andWhereRaw("ltrim(order_snapshot::json->>'position', '0') = ltrim(?, '0')", [String(position)])
-            .andWhere("workstation_name", workplace)
-            .orderBy("id", "desc")
-            .select("order_snapshot", "cycle_index", "total_cycles");
-        // The latest logged event of each door that has started.
-        const byCycle = new Map<number, (typeof starts)[number]>();
-        for (const s of starts) if (!byCycle.has(s.cycle_index)) byCycle.set(s.cycle_index, s);
-        if (byCycle.size === 0) {
-            return res.status(404).json({ error: `No ${workplace} cycle of ${salesOrder}/${position} has started yet` });
+        const all = await startedDoors(String(salesOrder).trim(), String(position).trim(), String(workplace));
+        const wanted = Array.isArray(cycles) && cycles.length ? new Set(cycles.map(Number)) : null;
+        const doors = wanted ? all.filter((d) => wanted.has(d.cycle)) : all;
+        if (doors.length === 0) {
+            return res.status(404).json({ error: `No ${workplace} door of ${salesOrder}/${position} has started yet` });
         }
 
-        const cycles = [...byCycle.keys()].sort((a, b) => a - b);
-        for (const cycle of cycles) {
-            const s = byCycle.get(cycle)!;
-            const order = JSON.parse(s.order_snapshot);
-            console.log(`[LABELS] Manual reprint of ${salesOrder}/${position} ${workplace} cycle ${cycle}/${s.total_cycles}`);
+        const results = [];
+        for (const door of doors) {
+            console.log(
+                `[LABELS] Manual ${force ? "full " : ""}reprint of ${salesOrder}/${position} ${workplace} ` +
+                    `door ${door.cycle}/${door.totalCycles}`,
+            );
             await handleLabelPrinting(
                 {
-                    order,
-                    cycleIndex: cycle,
-                    totalCycles: s.total_cycles,
-                    _id: `reprint:${order._id}:${cycle}`,
+                    order: door.order,
+                    cycleIndex: door.cycle,
+                    totalCycles: door.totalCycles,
+                    _id: `reprint:${door.order._id}:${door.cycle}`,
                     datetime: new Date().toISOString(),
-                    action: getTriggerForWorkplace(order.workplace) as OrderUpdate["action"],
+                    action: getTriggerForWorkplace(door.order.workplace) as OrderUpdate["action"],
                 },
-                { qrSticker: false },
+                { qrSticker: false, force: !!force },
             );
+            const db = await getDb();
+            const after = await db("label_print_log").where({ order_id: door.order._id, cycle_index: door.cycle }).count("* as n").first();
+            results.push({ cycle: door.cycle, printed: Number(after?.n ?? 0) - door.printed });
         }
-        res.json({ cycles });
+        res.json({ results });
     } catch (error) {
         console.error("Error reprinting labels:", error);
         res.status(500).json({ error: "Internal server error" });

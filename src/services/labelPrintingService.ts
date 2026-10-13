@@ -1388,7 +1388,9 @@ export async function handleLabelPrinting(
     update: OrderUpdate,
     // qrSticker: false for a manual reprint — QR stickers have no print log,
     // so replaying a cycle would print its QR sticker a second time.
-    options: { qrSticker?: boolean } = {},
+    // force: print every label of the cycle even if already printed (the
+    // admin "print again" after the CSV changed); it is logged again.
+    options: { qrSticker?: boolean; force?: boolean } = {},
 ): Promise<void> {
     const workplaceTrigger = getTriggerForWorkplace(update.order.workplace);
     if (update.action !== workplaceTrigger) {
@@ -1550,7 +1552,7 @@ export async function handleLabelPrinting(
             if (row.labelType !== entry.type) continue;
 
             // Duplicate guard – mirrors Databaze sheet check in VBA, scoped to this cycle
-            if (await isAlreadyPrinted(order._id, row, cycleIndex)) {
+            if (!options.force && (await isAlreadyPrinted(order._id, row, cycleIndex))) {
                 console.log(
                     `[LABELS] SKIP already printed: ${row.labelType} ${row.packagePart} ${row.packageType}`,
                 );

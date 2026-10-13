@@ -8,6 +8,7 @@ import {
     searchPbomHandler,
     printOrderDocumentsHandler,
     reprintOrderLabels,
+    getOrderLabelStatus,
     resolveScanHandler,
     listPbomTypesHandler,
     saveEdited,
@@ -39,6 +40,7 @@ router.get("/search-pbom", searchPbomHandler);
 router.post("/print-documents", printOrderDocumentsHandler);
 // Admin: print an order's missing box labels again (see reprintOrderLabels).
 router.post("/reprint-labels", adminPinAuth, reprintOrderLabels);
+router.get("/label-status", adminPinAuth, getOrderLabelStatus);
 router.get("/resolve-scan", resolveScanHandler);
 router.get("/pbom-types", listPbomTypesHandler);
 router.post("/order-completion", createOrderCompletion);

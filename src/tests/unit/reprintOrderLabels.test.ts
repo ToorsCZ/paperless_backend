@@ -7,26 +7,44 @@ jest.mock("../../index", () => ({ io: { emit: jest.fn() } }));
 
 import { Request, Response } from "express";
 import { getDb } from "../../config/database";
-import { reprintOrderLabels } from "../../controllers/workstationController";
+import { getOrderLabelStatus, reprintOrderLabels } from "../../controllers/workstationController";
 import { handleLabelPrinting } from "../../services/labelPrintingService";
 
-const snapshot = (cycle: number) => ({
+const start = (cycle: number) => ({
     order_snapshot: JSON.stringify({ _id: "ord1", salesOrder: "604984", position: "30", workplace: "Hardware", quantity: 3 }),
     cycle_index: cycle,
     total_cycles: 3,
+    created_at: "2026-10-12T11:36:44Z",
 });
 
-function mockStarts(rows: any[]) {
-    const chain: any = {};
-    chain.whereRaw = jest.fn(() => chain);
-    chain.andWhereRaw = jest.fn(() => chain);
-    chain.andWhere = jest.fn(() => chain);
-    chain.orderBy = jest.fn(() => chain);
-    chain.select = jest.fn().mockResolvedValue(rows);
-    (getDb as jest.Mock).mockResolvedValue(jest.fn(() => chain));
+// workstation_log → `starts` (newest first); label_print_log → `printedPerCycle`
+// rows per door, plus `extra` more after a reprint (what got printed).
+function mockDb(starts: any[], printedPerCycle: Record<number, number> = {}, extra = 0) {
+    let reprinted = false;
+    (handleLabelPrinting as jest.Mock).mockImplementation(async () => {
+        reprinted = true;
+    });
+    const db = jest.fn((table: string) => {
+        const chain: any = {};
+        let cycle = 0;
+        chain.whereRaw = jest.fn(() => chain);
+        chain.andWhereRaw = jest.fn(() => chain);
+        chain.andWhere = jest.fn(() => chain);
+        chain.orderBy = jest.fn(() => chain);
+        chain.select = jest.fn().mockResolvedValue(starts);
+        chain.where = jest.fn((w: any) => ((cycle = w.cycle_index), chain));
+        chain.count = jest.fn(() => chain);
+        chain.max = jest.fn(() => chain);
+        chain.first = jest.fn(async () => ({
+            n: String((printedPerCycle[cycle] ?? 0) + (reprinted ? extra : 0)),
+            last: null,
+        }));
+        return table === "workstation_log" || table === "label_print_log" ? chain : {};
+    });
+    (getDb as jest.Mock).mockResolvedValue(db);
 }
 
-describe("reprintOrderLabels", () => {
+describe("label reprint (admin)", () => {
     let json: jest.Mock;
     let status: jest.Mock;
     let res: Partial<Response>;
@@ -36,24 +54,41 @@ describe("reprintOrderLabels", () => {
         status = jest.fn(() => res as Response);
         res = { json, status };
     });
-    const call = (body: any) => reprintOrderLabels({ body } as Request, res as Response);
+    const reprint = (body: any) => reprintOrderLabels({ body } as Request, res as Response);
 
-    it("replays every door that has started — once each, labels only (no QR sticker)", async () => {
-        // newest first, door 1 started twice
-        mockStarts([snapshot(2), snapshot(1), snapshot(1)]);
-        await call({ salesOrder: "604984", position: "030" });
+    it("lists the doors that started, with how many labels each printed", async () => {
+        mockDb([start(2), start(1), start(1)], { 1: 5, 2: 0 });
+        await getOrderLabelStatus({ query: { salesOrder: "604984", position: "030" } } as any, res as Response);
+        expect(json).toHaveBeenCalledWith({
+            doors: [
+                expect.objectContaining({ cycle: 1, totalCycles: 3, printed: 5 }),
+                expect.objectContaining({ cycle: 2, totalCycles: 3, printed: 0 }),
+            ],
+        });
+    });
 
-        expect(handleLabelPrinting).toHaveBeenCalledTimes(2);
+    it("by default replays every started door once, missing labels only, never the QR sticker", async () => {
+        mockDb([start(2), start(1), start(1)]);
+        await reprint({ salesOrder: "604984", position: "030" });
         const calls = (handleLabelPrinting as jest.Mock).mock.calls;
         expect(calls.map((c) => c[0].cycleIndex)).toEqual([1, 2]);
         expect(calls[0][0]).toMatchObject({ action: "STARTED", totalCycles: 3, order: { salesOrder: "604984" } });
-        expect(calls[0][1]).toEqual({ qrSticker: false });
-        expect(json).toHaveBeenCalledWith({ cycles: [1, 2] });
+        expect(calls[0][1]).toEqual({ qrSticker: false, force: false });
+    });
+
+    it("force + cycles prints everything again for just the chosen doors, and says how many", async () => {
+        mockDb([start(2), start(1)], { 1: 5, 2: 5 }, 5);
+        await reprint({ salesOrder: "604984", position: "030", force: true, cycles: [2] });
+        const calls = (handleLabelPrinting as jest.Mock).mock.calls;
+        expect(calls).toHaveLength(1);
+        expect(calls[0][0].cycleIndex).toBe(2);
+        expect(calls[0][1]).toEqual({ qrSticker: false, force: true });
+        expect(json).toHaveBeenCalledWith({ results: [{ cycle: 2, printed: 5 }] });
     });
 
     it("404s when no door has started yet", async () => {
-        mockStarts([]);
-        await call({ salesOrder: "604984", position: "30" });
+        mockDb([]);
+        await reprint({ salesOrder: "604984", position: "30" });
         expect(status).toHaveBeenCalledWith(404);
         expect(handleLabelPrinting).not.toHaveBeenCalled();
     });
