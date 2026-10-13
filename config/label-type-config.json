@@ -1,6 +1,6 @@
 [
 {"scanB":"KM-SVK ","scanC":"K\"žSVK ","type":"section","printPrimary":"Ano","printSecondary":"Ne","copies":4,"printMethod":"V sérii","lastCycleNum":""},
-{"scanB":"KM-SVM ","scanC":"K\"žSV\" ","type":"moutings","printPrimary":"Ano","printSecondary":"Ne","copies":2,"printMethod":"V sérii","lastCycleNum":"0"},
+{"scanB":"KM-SVM ","scanC":"K\"žSV\" ","type":"moutings","printPrimary":"Ano","printSecondary":"Ne","copies":1,"printMethod":"V sérii","lastCycleNum":"0"},
 {"scanB":"KM-SVM ","scanC":"K\"žSV\" ","type":"motor","printPrimary":"Ano","printSecondary":"Ne","copies":1,"printMethod":"V sérii","lastCycleNum":"1"},
 {"scanB":"KM-SVM ","scanC":"K\"žSV\" ","type":"lista_motor","printPrimary":"Ano","printSecondary":"Ne","copies":1,"printMethod":"V sérii","lastCycleNum":"0"},
 {"scanB":"KM-SVM ","scanC":"K\"žSV\" ","type":"zavora","printPrimary":"Ano","printSecondary":"Ne","copies":1,"printMethod":"V sérii","lastCycleNum":"0"},

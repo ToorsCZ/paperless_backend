@@ -390,7 +390,7 @@ interface LabelTypeConfig {
 const LABEL_CONFIG: Record<string, LabelTypeConfig> = {
     // labelType         template              copies  cycleFilter
     section: { template: "aktualniCMD", copies: 4, cycleFilter: null },
-    moutings: { template: "aktualniCMD", copies: 2, cycleFilter: "last" },
+    moutings: { template: "aktualniCMD", copies: 1, cycleFilter: "last" },
     motor: { template: "aktualniCMD", copies: 1, cycleFilter: "first" },
     lista_motor: { template: "aktualniCMD", copies: 1, cycleFilter: "last" },
     zavora: { template: "aktualniCMD", copies: 1, cycleFilter: "last" },
