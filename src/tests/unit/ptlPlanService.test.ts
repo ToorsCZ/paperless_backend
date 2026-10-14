@@ -484,3 +484,24 @@ describe("recordPrepItemUnchecked", () => {
         await expect(recordPrepItemUnchecked("PN1", "01", "X1")).resolves.not.toThrow();
     });
 });
+
+describe("hardwareTypesFor — Indy/Guardy filtering by rail type", () => {
+    const { hardwareTypesFor } = jest.requireActual("../../services/ptlPlanService");
+
+    it("a GSL (hybrid) rail counts as both Indy and Guardy, whatever the plan says", () => {
+        expect(hardwareTypesFor("Guardy", "GSL").sort()).toEqual(["Guardy", "Indy"]);
+        expect(hardwareTypesFor("Indy", "GSL").sort()).toEqual(["Guardy", "Indy"]);
+    });
+
+    it("other rails keep the order file's type", () => {
+        expect(hardwareTypesFor("Guardy", "LHF-C")).toEqual(["Guardy"]);
+        expect(hardwareTypesFor("Indy", "SL")).toEqual(["Indy"]);
+        expect(hardwareTypesFor("Indy GT-R", "HL-GT")).toEqual(["Indy GT-R"]);
+    });
+
+    it("fills a missing type from the rail, and stays empty with neither", () => {
+        expect(hardwareTypesFor(null, "VL-T")).toEqual(["Indy"]);
+        expect(hardwareTypesFor(null, "EXT-B")).toEqual(["Guardy"]);
+        expect(hardwareTypesFor(null, null)).toEqual([]);
+    });
+});

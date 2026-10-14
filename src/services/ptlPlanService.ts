@@ -34,7 +34,7 @@
 import fs from "fs";
 import path from "path";
 import { getDb, getMasterplanDb } from "../config/database";
-import { normalizeWorkplace } from "./labelPrintingService";
+import { normalizeWorkplace, lookupTmpData } from "./labelPrintingService";
 import { resolveHardwareOrders } from "./hardwareOrderLookupService";
 import { OrderFileItem } from "./motorOrderService";
 
@@ -179,6 +179,17 @@ async function ingestPlanFile(
     const hardwareInfo = resolveHardwareOrders(
         hardwareRows.map((row) => ({ salesOrder: row.salesOrder, position: row.position })),
     );
+    // …and its rail type from the TMP file (via the label CSV), a few at a
+    // time — one CSV + one TMP read per row on the network share.
+    const railTypes = new Map<string, string>();
+    for (let i = 0; i < hardwareRows.length; i += 20) {
+        await Promise.all(
+            hardwareRows.slice(i, i + 20).map(async (row) => {
+                const tmp = await lookupTmpData(row.salesOrder, row.position);
+                if (tmp?.railType) railTypes.set(`${row.salesOrder}::${row.position}`, tmp.railType);
+            }),
+        );
+    }
 
     let ingested = 0;
     for (const row of rows) {
@@ -203,6 +214,7 @@ async function ingestPlanFile(
                 source_file: filename,
                 product_order: hw?.productOrder ?? null,
                 hardware_type: hw?.hardwareType ?? null,
+                rail_type: railTypes.get(`${row.salesOrder}::${row.position}`) ?? null,
                 non_ptl_items: nonPtlItems,
                 updated_at: db.fn.now(),
             })
@@ -216,6 +228,7 @@ async function ingestPlanFile(
                 source_file: filename,
                 product_order: hw?.productOrder ?? null,
                 hardware_type: hw?.hardwareType ?? null,
+                rail_type: railTypes.get(`${row.salesOrder}::${row.position}`) ?? null,
                 non_ptl_items: nonPtlItems,
                 updated_at: db.fn.now(),
             });
@@ -348,6 +361,36 @@ export async function checkForNewPlan(force = false): Promise<{
     }
 }
 
+// Rail types (TMP 06210610) by hardware family — the QR sticker map in
+// labelPrintingService lists the same codes.
+const GUARDY_RAILS = new Set(["GSL", "LHF-C", "LHR-C", "EXT-B", "EXT-O"]);
+const GT_R_RAILS = new Set(["SL-GT", "HL-GT", "VL-GT"]);
+// Hybrid: built on Indy plans but with a Guardy rail — counts as both.
+const HYBRID_RAILS = new Set(["GSL"]);
+
+function railFamily(railType: string): string {
+    if (GUARDY_RAILS.has(railType)) return "Guardy";
+    if (GT_R_RAILS.has(railType)) return "Indy GT-R";
+    return "Indy";
+}
+
+/**
+ * The hardware types a prep-queue row is filtered under: its order file's
+ * family (hardware_type), plus — from its rail type — both Indy and Guardy
+ * for a hybrid (GSL) rail, or the rail's family when the order file hasn't
+ * been found yet.
+ */
+export function hardwareTypesFor(hardwareType: string | null, railType: string | null): string[] {
+    const types = new Set<string>();
+    if (hardwareType) types.add(hardwareType);
+    if (railType && HYBRID_RAILS.has(railType)) {
+        types.add("Indy");
+        types.add("Guardy");
+    }
+    if (railType && types.size === 0) types.add(railFamily(railType));
+    return [...types];
+}
+
 export interface PrepQueueFilters {
     date?: string | undefined; // exact planned_date, "YYYY-MM-DD"
     dateFrom?: string | undefined;
@@ -389,9 +432,6 @@ export async function getPrepQueue(filters: PrepQueueFilters = {}) {
     if (filters.workplace) {
         query = query.andWhere("q.workplace", filters.workplace);
     }
-    if (filters.hardwareType) {
-        query = query.andWhere("q.hardware_type", filters.hardwareType);
-    }
 
     const rows: any[] = await query.select("q.*");
 
@@ -401,10 +441,13 @@ export async function getPrepQueue(filters: PrepQueueFilters = {}) {
     // planning department has locked the order for reprinting). A single
     // batch query fetches all relevant locks so this is not N+1.
     const lockedKeys = await fetchLockedKeys(rows);
-    return rows.map((row) => ({
-        ...row,
-        locked: lockedKeys.has(`${row.project_number}::${row.position}`),
-    }));
+    return rows
+        .map((row) => ({
+            ...row,
+            hardware_types: hardwareTypesFor(row.hardware_type, row.rail_type),
+            locked: lockedKeys.has(`${row.project_number}::${row.position}`),
+        }))
+        .filter((row) => !filters.hardwareType || row.hardware_types.includes(filters.hardwareType));
 }
 
 /**
@@ -466,11 +509,8 @@ export async function getPrepQueueWorkplaces(): Promise<string[]> {
 /** Distinct Hardware types (Indy/Guardy/...) currently present in the queue, for building a filter UI. */
 export async function getPrepQueueHardwareTypes(): Promise<string[]> {
     const db = await getDb();
-    const rows = await db("ptl_prep_queue")
-        .distinct("hardware_type")
-        .whereNotNull("hardware_type")
-        .orderBy("hardware_type");
-    return rows.map((r: any) => r.hardware_type);
+    const rows = await db("ptl_prep_queue").distinct("hardware_type", "rail_type");
+    return [...new Set(rows.flatMap((r: any) => hardwareTypesFor(r.hardware_type, r.rail_type)))].sort();
 }
 
 // ─── per-item prep checklist ────────────────────────────────────────────────

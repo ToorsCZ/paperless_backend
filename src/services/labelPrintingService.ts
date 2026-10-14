@@ -1691,7 +1691,7 @@ const QR_CODE_MAP: Record<string, string> = {
  *   col B = "00000040"  → col D = "j"/"n" — special technical requirements,
  *                         i.e. this position needs a quality-control check
  */
-interface TmpFileData {
+export interface TmpFileData {
     railType: string;
     doorCount: number;
     priceGroup: string;
@@ -1777,6 +1777,15 @@ export async function lookupQcRequired(
     salesOrder: string,
     position: string,
 ): Promise<boolean | null> {
+    return (await lookupTmpData(salesOrder, position))?.qcRequired ?? null;
+}
+
+/**
+ * An order position's TMP file data (rail type, QC flag, …), found through
+ * its label CSV (col 13 names the TMP file). null when either file is
+ * missing or unreadable.
+ */
+export async function lookupTmpData(salesOrder: string, position: string): Promise<TmpFileData | null> {
     try {
         const csv = await fs.promises.readFile(buildCsvPath(salesOrder, position), "latin1");
         const tmpFile = parseCsvRows(csv).find((r) =>
@@ -1784,7 +1793,7 @@ export async function lookupQcRequired(
         )?.tmpFile;
         if (!tmpFile) return null;
         const tmp = await fs.promises.readFile(path.join(TMP_FILES_PATH, tmpFile), "latin1");
-        return parseTmpContent(tmp, position).qcRequired;
+        return parseTmpContent(tmp, position);
     } catch {
         return null;
     }

@@ -451,6 +451,15 @@ const setupDatabase = async (targetDb: Knex) => {
         });
     }
 
+    // 14c. The rail type of a Hardware row, from its TMP file (06210610) —
+    // a GSL rail makes the order count as both Indy and Guardy in the prep
+    // queue filters (see ptlPlanService.hardwareTypesFor).
+    if (!(await targetDb.schema.hasColumn("ptl_prep_queue", "rail_type"))) {
+        await targetDb.schema.alterTable("ptl_prep_queue", (table) => {
+            table.string("rail_type");
+        });
+    }
+
     // 15. ptl_ingest_state table — a single row tracking the last
     // productionPlanPTL.json file that was actually ingested, so the
     // periodic checker (and the force-refresh endpoint) can tell "nothing
