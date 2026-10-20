@@ -222,7 +222,7 @@ describe("getPrepQueue — Masterplan lock annotation", () => {
         const chain: any = {
             then: (resolve: any) => resolve(lockedRows),
         };
-        for (const m of ["where", "select", "orWhere"]) {
+        for (const m of ["where", "whereIn", "select", "orWhere"]) {
             chain[m] = jest.fn(() => chain);
         }
         return jest.fn(() => chain);
@@ -242,6 +242,17 @@ describe("getPrepQueue — Masterplan lock annotation", () => {
         expect(result.find((r: any) => r.project_number === "603529")?.locked).toBe(true);
         expect(result.find((r: any) => r.project_number === "603684")?.locked).toBe(false);
         expect(result.find((r: any) => r.project_number === "604427")?.locked).toBe(false);
+    });
+
+    it("treats tisk_zamcen 1 (automatic) and 2 (by a user) both as locked", async () => {
+        (getDb as jest.Mock).mockResolvedValue(makeMainDbMock(queueRows));
+        const mp = makeMasterplanDbMock([]);
+        (getMasterplanDb as jest.Mock).mockResolvedValue(mp);
+
+        await getPrepQueue();
+
+        const chain = mp.mock.results[0]!.value;
+        expect(chain.whereIn).toHaveBeenCalledWith("tisk_zamcen", [1, 2]);
     });
 
     it("marks all rows unlocked when Masterplan returns no locked rows", async () => {

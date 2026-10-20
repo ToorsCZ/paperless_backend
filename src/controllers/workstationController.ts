@@ -326,7 +326,7 @@ export const listPbomTypesHandler = async (req: Request, res: Response) => {
 };
 
 // Annotates search-style results with lock status from Masterplan (same
-// check as the prep queue — vyroba.tisk_zamcen=1 means the order is locked).
+// check as the prep queue — vyroba.tisk_zamcen 1 or 2 means the order is locked).
 // The search/scan tabs still let users open the document (read-only access
 // for inspection remains useful), but show the red lock indicator so
 // workers know preparation is blocked before they navigate into it. Shared

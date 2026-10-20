@@ -436,7 +436,7 @@ export async function getPrepQueue(filters: PrepQueueFilters = {}) {
     const rows: any[] = await query.select("q.*");
 
     // Annotate each row with a `locked` flag from the Masterplan database.
-    // Rows where vyroba.tisk_zamcen = 1 must not be processed — the
+    // Rows where vyroba.tisk_zamcen is 1 (automatic) or 2 (by a user) must not be processed — the
     // physical preparation is blocked by an external decision (e.g. the
     // planning department has locked the order for reprinting). A single
     // batch query fetches all relevant locks so this is not N+1.
@@ -451,7 +451,7 @@ export async function getPrepQueue(filters: PrepQueueFilters = {}) {
 }
 
 /**
- * Queries the Masterplan database for any vyroba rows where tisk_zamcen = 1
+ * Queries the Masterplan database for any vyroba rows where tisk_zamcen is 1 or 2
  * for the given queue items. Returns a Set of "projectNumber::position" keys
  * that are locked. Fails open (empty set) if the Masterplan DB is
  * unavailable — a connectivity hiccup should never prevent workers from
@@ -480,7 +480,8 @@ export async function fetchLockedKeys(
         }));
 
         const locked: { zak: string; poz: string }[] = await mpDb("vyroba")
-            .where("tisk_zamcen", 1)
+            // 1 = locked automatically, 2 = locked by a user — both mean locked here.
+            .whereIn("tisk_zamcen", [1, 2])
             .where(function () {
                 for (const c of conditions) {
                     this.orWhere({ zak: c.zak, poz: c.poz });
