@@ -367,6 +367,9 @@ export const searchPbomHandler = async (req: Request, res: Response) => {
  * the order data logged with its latest start — what a label reprint is
  * replayed from — and how many label prints are logged for it.
  */
+// The workplaces whose box labels the admin can reprint.
+const REPRINT_WORKPLACES = ["Hardware", "Motor"];
+
 async function startedDoors(salesOrder: string, position: string, workplace: string) {
     const db = await getDb();
     const starts = await db("workstation_log")
@@ -407,6 +410,9 @@ export const getOrderLabelStatus = async (req: Request, res: Response) => {
     if (typeof salesOrder !== "string" || typeof position !== "string") {
         return res.status(400).json({ error: "salesOrder and position are required" });
     }
+    if (!REPRINT_WORKPLACES.includes(String(workplace))) {
+        return res.status(400).json({ error: `workplace must be one of: ${REPRINT_WORKPLACES.join(", ")}` });
+    }
     try {
         const doors = await startedDoors(salesOrder.trim(), position.trim(), String(workplace));
         res.json({ doors: doors.map(publicDoor) });
@@ -430,6 +436,9 @@ export const reprintOrderLabels = async (req: Request, res: Response) => {
     const { salesOrder, position, workplace = "Hardware", force = false, cycles } = req.body;
     if (!salesOrder || !position) {
         return res.status(400).json({ error: "salesOrder and position are required" });
+    }
+    if (!REPRINT_WORKPLACES.includes(String(workplace))) {
+        return res.status(400).json({ error: `workplace must be one of: ${REPRINT_WORKPLACES.join(", ")}` });
     }
     try {
         const all = await startedDoors(String(salesOrder).trim(), String(position).trim(), String(workplace));

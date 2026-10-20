@@ -93,3 +93,35 @@ describe("label reprint (admin)", () => {
         expect(handleLabelPrinting).not.toHaveBeenCalled();
     });
 });
+
+describe("label reprint (admin) — Motor", () => {
+    let json: jest.Mock;
+    let status: jest.Mock;
+    let res: Partial<Response>;
+    beforeEach(() => {
+        jest.clearAllMocks();
+        json = jest.fn();
+        status = jest.fn(() => res as Response);
+        res = { json, status };
+    });
+    const motorStart = (cycle: number) => ({
+        ...start(cycle),
+        order_snapshot: JSON.stringify({ _id: "mot1", salesOrder: "604984", position: "30", workplace: "Motor", quantity: 3, maxCycle: 2 }),
+    });
+
+    it("replays Motor starts too, so a Motor batch's labels can be printed again", async () => {
+        mockDb([motorStart(2), motorStart(1)], { 1: 4, 2: 2 }, 4);
+        await reprintOrderLabels({ body: { salesOrder: "604984", position: "030", workplace: "Motor", force: true, cycles: [1] } } as Request, res as Response);
+        const calls = (handleLabelPrinting as jest.Mock).mock.calls;
+        expect(calls).toHaveLength(1);
+        expect(calls[0][0]).toMatchObject({ cycleIndex: 1, order: { workplace: "Motor", maxCycle: 2 } });
+        expect(calls[0][1]).toEqual({ qrSticker: false, force: true });
+    });
+
+    it("refuses any other workplace", async () => {
+        mockDb([start(1)]);
+        await reprintOrderLabels({ body: { salesOrder: "604984", position: "30", workplace: "PredHridel" } } as Request, res as Response);
+        expect(status).toHaveBeenCalledWith(400);
+        expect(handleLabelPrinting).not.toHaveBeenCalled();
+    });
+});
