@@ -15,7 +15,6 @@ import {
     DOCUMENT_TYPES,
 } from "../config/documentTypes";
 import { convertToPdfA, PdfaConversionError } from "./pdfaService";
-import { resolveHardwareOrders } from "./hardwareOrderLookupService";
 
 // Network share where archived PDF/A copies are written, e.g.
 //   \\FILESERVER\Archive          (Windows UNC)
@@ -23,9 +22,11 @@ import { resolveHardwareOrders } from "./hardwareOrderLookupService";
 // Required — if unset, the sweep logs a warning and does nothing rather than
 // silently writing archives somewhere unexpected.
 const ARCHIVE_SHARE_PATH = process.env.ARCHIVE_SHARE_PATH || "";
-// Guardy orders go here instead — flat, no subfolders: the folder the DMS
-// app scans and ingests from. Empty = Guardy archives like everything else.
-const ARCHIVE_GUARDY_PATH = process.env.ARCHIVE_GUARDY_PATH || "";
+// Every order goes here instead — flat, no subfolders: the folder the DMS
+// app scans and ingests from (only SVM_<salesOrder>_<000>.pdf names are
+// taken, see archiveFilename). Empty = archive into ARCHIVE_SHARE_PATH.
+// ARCHIVE_GUARDY_PATH is its old name, from when only Guardy went there.
+const ARCHIVE_DMS_PATH = process.env.ARCHIVE_DMS_PATH || process.env.ARCHIVE_GUARDY_PATH || "";
 
 // How many days after an order is tagged "Complete" (via the workstation
 // kiosk's completion confirmation) it becomes eligible for archival.
@@ -156,29 +157,6 @@ export function archiveFilename(salesOrder: string | null, documentType: number,
     const n = parseInt(position, 10);
     const pos = Number.isNaN(n) ? position : String(documentType === DOCUMENT_TYPES.PBOM_MOTOR ? n + 1 : n).padStart(3, "0");
     return `SVM_${salesOrder}_${pos}.pdf`;
-}
-
-/**
- * Is this a Guardy order? Read from its PTL order file ("Hardware (Guardy)",
- * newest file wins — see hardwareOrderLookupService), falling back to the
- * hardware family stored on its prep-queue row.
- */
-async function isGuardyOrder(row: ArchiveLogRow): Promise<boolean> {
-    let hardwareType = row.sales_order
-        ? resolveHardwareOrders([{ salesOrder: row.sales_order, position: row.position }]).get(
-              `${row.sales_order}::${row.position}`,
-          )?.hardwareType
-        : null;
-    if (!hardwareType) {
-        const db = await getDb();
-        const queueRow = await db("ptl_prep_queue")
-            .where({ project_number: row.project_number, position: row.position })
-            .whereNotNull("hardware_type")
-            .select("hardware_type")
-            .first();
-        hardwareType = queueRow?.hardware_type ?? null;
-    }
-    return hardwareType?.toLowerCase() === "guardy";
 }
 
 const QC_ISSUE_MARK = "(!)";
@@ -527,7 +505,7 @@ export async function appendCycleInfoPage(
  * workplaces it passed through), fetches that PBOM from doc_manager,
  * converts it to real PDF/A, and writes it to
  * ARCHIVE_SHARE_PATH/{projectNumber}/{position}/SVM_{salesOrder}_{position:000}.pdf
- * — or, for a Guardy order, flat into ARCHIVE_GUARDY_PATH (the DMS scan folder)
+ * — or, when ARCHIVE_DMS_PATH is set, flat into that DMS scan folder
  * (see archiveFilename for the naming and the Hardware/Motor offset).
  *
  * Only PBOM documents are archived — declarations, drawings, confirmations,
@@ -540,9 +518,9 @@ export async function appendCycleInfoPage(
 async function archiveOrder(
     row: ArchiveLogRow,
 ): Promise<{ archivedCount: number; attemptedCount: number }> {
-    // Guardy orders go flat into the folder the DMS app scans (see
-    // isGuardyOrder); everything else into {project}/{position} folders.
-    const dmsDir = ARCHIVE_GUARDY_PATH && (await isGuardyOrder(row)) ? ARCHIVE_GUARDY_PATH : null;
+    // Flat into the folder the DMS app scans, or else into
+    // {project}/{position} folders of the archive share.
+    const dmsDir = ARCHIVE_DMS_PATH || null;
     const orderDir = dmsDir ?? path.join(ARCHIVE_SHARE_PATH, row.project_number, row.position);
     let archivedCount = 0;
 

@@ -1,5 +1,4 @@
 process.env.ARCHIVE_SHARE_PATH = "/tmp/test-archive-share";
-process.env.ARCHIVE_GUARDY_PATH = "/tmp/test-dms-scan";
 process.env.ARCHIVE_RETENTION_DAYS = "7";
 process.env.ARCHIVE_MAX_ATTEMPTS = "3";
 
@@ -8,10 +7,6 @@ jest.mock("axios");
 jest.mock("../../services/pdfaService", () => ({
     convertToPdfA: jest.fn(),
     PdfaConversionError: class PdfaConversionError extends Error {},
-}));
-// Guardy detection reads the PTL order file — none by default.
-jest.mock("../../services/hardwareOrderLookupService", () => ({
-    resolveHardwareOrders: jest.fn(() => new Map()),
 }));
 jest.mock("../../services/workstationService", () => ({
     DOC_MANAGER_URL: "http://doc-manager.test",
@@ -32,7 +27,6 @@ import axios from "axios";
 import fs from "fs";
 import { convertToPdfA } from "../../services/pdfaService";
 import { PDFDocument, StandardFonts } from "pdf-lib";
-import { resolveHardwareOrders } from "../../services/hardwareOrderLookupService";
 
 function thenable<T>(value: T) {
     return { then: (resolve: (v: T) => void) => resolve(value) };
@@ -192,47 +186,6 @@ describe("archivalService", () => {
                 expect.stringContaining(`SVM_604473_011.pdf`),
             ]),
         );
-    });
-
-    it("archives a Guardy order flat into the DMS scan folder, copying in only the finished PDF", async () => {
-        const row = {
-            id: 9,
-            order_id: "order-9",
-            project_number: "P9",
-            position: "20",
-            sales_order: "G1",
-            finished_at: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
-            attempts: 0,
-        };
-        const db = Object.assign(
-            jest.fn((table: string) => {
-                if (table === "order_archive_log") {
-                    return { ...makeArchiveLogQuery([row]), where: () => ({ update: jest.fn(() => thenable(undefined)) }) };
-                }
-                if (table === "workstation_log") return makeWorkstationLogQuery(["Hardware"]);
-                return chainableEmpty();
-            }),
-            { fn: { now: () => "NOW()" } },
-        );
-        (getDb as jest.Mock).mockResolvedValue(db);
-        (resolveHardwareOrders as jest.Mock).mockReturnValueOnce(
-            new Map([["G1::20", { productOrder: "1", hardwareType: "Guardy", nonPtlItems: [], quantity: 1 }]]),
-        );
-        (axios.get as jest.Mock).mockResolvedValue({
-            status: 200,
-            headers: { "content-disposition": 'attachment; filename="doc.pdf"' },
-            data: Buffer.from("%PDF-fake"),
-        });
-        (convertToPdfA as jest.Mock).mockResolvedValue(undefined);
-
-        await runArchivalSweep();
-
-        const finalPath = require("path").join("/tmp/test-dms-scan", "SVM_G1_020.pdf");
-        // Only the final .pdf ever lands there — no temporary names.
-        expect(fs.copyFileSync).toHaveBeenCalledTimes(1);
-        expect(fs.copyFileSync).toHaveBeenCalledWith(expect.stringMatching(/\.pdf$/), finalPath);
-        // Converted somewhere else first, not straight into the scanned folder.
-        expect((convertToPdfA as jest.Mock).mock.calls[0][1]).not.toContain("test-dms-scan");
     });
 
     it("stamps a per-cycle production record page (prepared/completed/checked by) onto the archived PDF", async () => {

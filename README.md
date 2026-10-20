@@ -57,8 +57,8 @@ hardware labels/QR stickers, and pushes live updates over Socket.IO.
 - **Retention archival** — periodic sweep that converts finished orders'
   PDFs to PDF/A, stamps the production record (preparation, completion,
   check and QC per cycle, in Czech) and archives them to a network share
-  (`archivalService.ts`). Guardy orders go flat into the DMS scan folder
-  (`ARCHIVE_GUARDY_PATH`) instead — only finished PDFs, built locally and
+  (`archivalService.ts`). With `ARCHIVE_DMS_PATH` set, every order goes
+  flat into the DMS scan folder instead — only finished PDFs, built locally and
   copied in under their final name, nothing else. Archived files are named
   `SVM_<salesOrder>_<position, 3 digits>.pdf` (Motor at position + 1) —
   the only name the DMS scan import accepts.
