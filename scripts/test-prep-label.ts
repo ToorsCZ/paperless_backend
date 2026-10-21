@@ -24,7 +24,9 @@ process.env.PREP_LABEL_PRINTER_DPI = dpiArg;
     const pdf = buildPrepLabelPdf("605009", "030", "TEST tisku", Number(doorsArg), "604984", "238549");
     const sent = await printPrepLabelBuffer(pdf);
     console.log(sent ? `Sent ${doorsArg} test label(s) to ${ip}:9100 (${dpiArg} DPI, ZPL)` : "Not sent — printing is switched off in /settings/printing");
-    process.exit(sent ? 0 : 2);
+    // printPrepLabelBuffer keeps the connection open a few seconds after
+    // sending — exiting at once would cut it and lose labels.
+    setTimeout(() => process.exit(sent ? 0 : 2), 6000);
 })().catch((err: any) => {
     console.error(`Failed: ${err.message}`);
     process.exit(1);

@@ -3,6 +3,7 @@ import {
     applyDuplexToBuffer,
     parsePbmRaw,
     pbmRawToZplLabel,
+    zplCompressRow,
     splitPbmRawPages,
     buildPdfFromPngFitted,
     PngInfo,
@@ -362,18 +363,59 @@ describe("pbmRawToZplLabel", () => {
         expect(zpl.trim().endsWith("^XZ")).toBe(true);
     });
 
-    it("hex-encodes the packed pixel bytes directly into ^GFA (same bit convention, no inversion)", () => {
-        const pbm = makePbmRaw(8, 2, [0xf0, 0x0f]);
-        const zpl = pbmRawToZplLabel(pbm).toString("ascii");
-        // 1 byte/row × 2 rows = 2 total bytes, hex "F00F"
-        expect(zpl).toContain("^GFA,2,2,1,F00F");
+    // Decodes ZPL ASCII-compressed ^GFA data back to plain hex, row by row.
+    const expand = (data: string, bytesPerRow: number) => {
+        const width = bytesPerRow * 2;
+        let prev = "";
+        return data
+            .split("\n")
+            .map((line) => {
+                if (line === ":") return prev;
+                let row = "";
+                let count = 0;
+                for (const ch of line) {
+                    if (ch >= "G" && ch <= "Y") count += ch.charCodeAt(0) - 0x46;
+                    else if (ch >= "g" && ch <= "z") count += (ch.charCodeAt(0) - 0x66) * 20;
+                    else if (ch === ",") row = row.padEnd(width, "0");
+                    else (row += ch.repeat(count || 1)), (count = 0);
+                }
+                return (prev = row);
+            })
+            .join("");
+    };
+    const gfa = (zpl: string) => zpl.match(/\^GFA,(\d+),(\d+),(\d+),([^\^]*)\n\^FS/)!;
+
+    it("puts the packed pixel bytes into ^GFA (same bit convention, no inversion)", () => {
+        const zpl = pbmRawToZplLabel(makePbmRaw(8, 2, [0xf0, 0x0f])).toString("ascii");
+        const m = gfa(zpl);
+        expect(m.slice(1, 4)).toEqual(["2", "2", "1"]);
+        expect(expand(m[4]!, 1)).toBe("F00F");
     });
 
     it("computes byte-per-row / total-byte counts correctly for a wider bitmap", () => {
-        // 16×3: 2 bytes/row, 6 bytes total
-        const pbm = makePbmRaw(16, 3, [0xff, 0x00, 0x0f, 0xf0, 0xaa, 0x55]);
-        const zpl = pbmRawToZplLabel(pbm).toString("ascii");
-        expect(zpl).toContain("^GFA,6,6,2,FF000FF0AA55");
+        const zpl = pbmRawToZplLabel(makePbmRaw(16, 3, [0xff, 0x00, 0x0f, 0xf0, 0xaa, 0x55])).toString("ascii");
+        const m = gfa(zpl);
+        expect(m.slice(1, 4)).toEqual(["6", "6", "2"]);
+        expect(expand(m[4]!, 2)).toBe("FF000FF0AA55");
+    });
+
+    it("compresses a label-sized bitmap losslessly to a fraction of its size", () => {
+        // 800×1040 like a prep label: mostly white, a few black blocks and stripes.
+        const w = 800, h = 1040, bpr = w / 8;
+        const bytes: number[] = [];
+        for (let y = 0; y < h; y++)
+            for (let x = 0; x < bpr; x++)
+                bytes.push(y > 100 && y < 300 && x > 10 && x < 60 ? 0xff : y % 97 === 0 ? 0xaa : (x * 7 + y) % 251 === 0 ? 0x3c : 0x00);
+        const zpl = pbmRawToZplLabel(makePbmRaw(w, h, bytes)).toString("ascii");
+        const m = gfa(zpl);
+        expect(expand(m[4]!, bpr)).toBe(Buffer.from(bytes).toString("hex").toUpperCase());
+        expect(zpl.length).toBeLessThan((bpr * h * 2) / 4);
+    });
+
+    it("encodes long runs with count letters (g..z, G..Y)", () => {
+        expect(zplCompressRow("F".repeat(25) + "0".repeat(5))).toBe("gKF,");
+        expect(zplCompressRow("A".repeat(460) + "B")).toBe("ziAB"); // 400 + 60
+        expect(zplCompressRow("0".repeat(10))).toBe(",");
     });
 });
 

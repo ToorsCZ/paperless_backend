@@ -110,6 +110,9 @@ export const PREP_LABEL_PAGE_HEIGHT_PT = 368.5;
 //     since ^PW/^LL are emitted in dots at that resolution.
 
 export const PREP_LABEL_PRINTER_HOST = process.env.PREP_LABEL_PRINTER_HOST || "";
+// How long the connection stays open after a prep label job is sent (see
+// printPrepLabelBuffer) — 5 s covers a multi-door job on a ZD230.
+const PREP_LABEL_CLOSE_DELAY_MS = 5000;
 export const PREP_LABEL_PRINTER_PORT = parseInt(
     process.env.PREP_LABEL_PRINTER_PORT || "9100",
     10,
@@ -253,6 +256,35 @@ export function splitPbmRawPages(pbm: Buffer): Buffer[] {
 }
 
 /**
+ * One bitmap row of hex, compressed with ZPL's ASCII compression: a run of
+ * the same hex digit becomes a count + the digit (G..Y = 1..19, g..z =
+ * 20..400, letters add up), a row that ends in zeros ends with "," (fill
+ * the rest with 0), an all-zero row is just ",". (":" — repeat the previous
+ * row — is handled by the caller.)
+ */
+export function zplCompressRow(hex: string): string {
+    let out = "";
+    let i = 0;
+    while (i < hex.length) {
+        const c = hex[i]!;
+        let n = 1;
+        while (i + n < hex.length && hex[i + n] === c) n++;
+        if (c === "0" && i + n === hex.length) return out + ",";
+        let count = "";
+        let rest = n;
+        while (rest >= 20) {
+            const k = Math.min(400, Math.floor(rest / 20) * 20);
+            count += String.fromCharCode(0x67 + k / 20 - 1); // g = 20
+            rest -= k;
+        }
+        if (rest > 0) count += String.fromCharCode(0x47 + rest - 1); // G = 1
+        out += (n > 1 ? count : "") + c;
+        i += n;
+    }
+    return out;
+}
+
+/**
  * Wraps a raw PBM (P4) buffer into a complete Zebra ZPL label job: a ^GFA
  * graphic field holding the whole bitmap, inside a minimal ^XA...^XZ label
  * sized to the bitmap via ^PW/^LL. Pure/sync so it's directly testable
@@ -262,7 +294,17 @@ export function pbmRawToZplLabel(pbm: Buffer): Buffer {
     const { width, height, data } = parsePbmRaw(pbm);
     const bytesPerRow = Math.ceil(width / 8);
     const totalBytes = bytesPerRow * height;
-    const hex = data.toString("hex").toUpperCase();
+
+    // ZPL ASCII compression, one line per bitmap row. A full prep label is
+    // ~208 kB as plain hex — the Zebra ZD230 silently drops a job that big,
+    // compressed it's ~30 kB and prints on every ZPL II printer.
+    const rows: string[] = [];
+    let previous = "";
+    for (let y = 0; y < height; y++) {
+        const row = data.subarray(y * bytesPerRow, (y + 1) * bytesPerRow).toString("hex").toUpperCase();
+        rows.push(y > 0 && row === previous ? ":" : zplCompressRow(row));
+        previous = row;
+    }
 
     return Buffer.from(
         [
@@ -270,7 +312,7 @@ export function pbmRawToZplLabel(pbm: Buffer): Buffer {
             `^PW${width}`,
             `^LL${height}`,
             "^FO0,0",
-            `^GFA,${totalBytes},${totalBytes},${bytesPerRow},${hex}`,
+            `^GFA,${totalBytes},${totalBytes},${bytesPerRow},${rows.join("\n")}`,
             "^FS",
             "^XZ",
             "",
@@ -440,7 +482,13 @@ export async function printPrepLabelBuffer(pdfBuffer: Buffer): Promise<boolean> 
             socket.connect(PREP_LABEL_PRINTER_PORT, PREP_LABEL_PRINTER_HOST, () => {
                 socket.write(rendered, (err?: Error | null) => {
                     if (err) { socket.destroy(); reject(err); }
-                    else { socket.end(); resolve(); }
+                    else {
+                        resolve();
+                        // Keep the connection open a moment: the Zebra ZD230
+                        // drops whatever it hasn't printed yet when the
+                        // connection closes (a 2-door job came out as 1 label).
+                        setTimeout(() => socket.end(), PREP_LABEL_CLOSE_DELAY_MS);
+                    }
                 });
             });
             socket.on("error", (err: Error) => { socket.destroy(); reject(err); });
