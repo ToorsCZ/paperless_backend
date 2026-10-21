@@ -290,7 +290,10 @@ export function zplCompressRow(hex: string): string {
  * sized to the bitmap via ^PW/^LL. Pure/sync so it's directly testable
  * against a hand-built PBM buffer, same as applyDuplexToBuffer above.
  */
-export function pbmRawToZplLabel(pbm: Buffer): Buffer {
+// compress: ZPL ASCII compression of the image — needed by the Zebra ZD230 (it
+// drops a ~208 kB plain prep label), off for the QR stickers, which go to a
+// Godex in ZPL emulation that may not decode it.
+export function pbmRawToZplLabel(pbm: Buffer, compress = false): Buffer {
     const { width, height, data } = parsePbmRaw(pbm);
     const bytesPerRow = Math.ceil(width / 8);
     const totalBytes = bytesPerRow * height;
@@ -302,7 +305,7 @@ export function pbmRawToZplLabel(pbm: Buffer): Buffer {
     let previous = "";
     for (let y = 0; y < height; y++) {
         const row = data.subarray(y * bytesPerRow, (y + 1) * bytesPerRow).toString("hex").toUpperCase();
-        rows.push(y > 0 && row === previous ? ":" : zplCompressRow(row));
+        rows.push(!compress ? row : y > 0 && row === previous ? ":" : zplCompressRow(row));
         previous = row;
     }
 
@@ -312,7 +315,7 @@ export function pbmRawToZplLabel(pbm: Buffer): Buffer {
             `^PW${width}`,
             `^LL${height}`,
             "^FO0,0",
-            `^GFA,${totalBytes},${totalBytes},${bytesPerRow},${rows.join("\n")}`,
+            `^GFA,${totalBytes},${totalBytes},${bytesPerRow},${rows.join(compress ? "\n" : "")}`,
             "^FS",
             "^XZ",
             "",
@@ -327,7 +330,7 @@ export function pbmRawToZplLabel(pbm: Buffer): Buffer {
  * pbmRawToZplLabel. The returned buffer is plain ASCII — send it straight
  * to the printer's raw TCP port, no PJL/PCL wrapping involved.
  */
-export async function renderPdfToZplBuffer(pdfPath: string, dpi: number): Promise<Buffer> {
+export async function renderPdfToZplBuffer(pdfPath: string, dpi: number, compress = false): Promise<Buffer> {
     const { execFile } = await import("child_process");
     const { promisify } = await import("util");
     const execFileAsync = promisify(execFile);
@@ -342,7 +345,7 @@ export async function renderPdfToZplBuffer(pdfPath: string, dpi: number): Promis
     // multi-page prep label (one page per door/box) must print every page,
     // not just the first.
     const pages = splitPbmRawPages(stdout as unknown as Buffer);
-    return Buffer.concat(pages.map(pbmRawToZplLabel));
+    return Buffer.concat(pages.map((page) => pbmRawToZplLabel(page, compress)));
 }
 
 /**
@@ -455,7 +458,7 @@ export async function printPrepLabelBuffer(pdfBuffer: Buffer): Promise<boolean> 
 
         const rendered: Buffer =
             PREP_LABEL_PRINTER_DEVICE.toLowerCase() === "zpl"
-                ? await renderPdfToZplBuffer(tmpPath, PREP_LABEL_PRINTER_DPI)
+                ? await renderPdfToZplBuffer(tmpPath, PREP_LABEL_PRINTER_DPI, true)
                 : await (async () => {
                       const { execFile } = await import("child_process");
                       const { promisify } = await import("util");

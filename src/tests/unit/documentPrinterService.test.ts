@@ -385,15 +385,22 @@ describe("pbmRawToZplLabel", () => {
     };
     const gfa = (zpl: string) => zpl.match(/\^GFA,(\d+),(\d+),(\d+),([^\^]*)\n\^FS/)!;
 
+    it("by default (QR stickers on the Godex) sends plain hex, exactly as before", () => {
+        expect(pbmRawToZplLabel(makePbmRaw(8, 2, [0xf0, 0x0f])).toString("ascii")).toContain("^GFA,2,2,1,F00F\n^FS");
+        expect(pbmRawToZplLabel(makePbmRaw(16, 3, [0xff, 0x00, 0x0f, 0xf0, 0xaa, 0x55])).toString("ascii")).toContain(
+            "^GFA,6,6,2,FF000FF0AA55\n^FS",
+        );
+    });
+
     it("puts the packed pixel bytes into ^GFA (same bit convention, no inversion)", () => {
-        const zpl = pbmRawToZplLabel(makePbmRaw(8, 2, [0xf0, 0x0f])).toString("ascii");
+        const zpl = pbmRawToZplLabel(makePbmRaw(8, 2, [0xf0, 0x0f]), true).toString("ascii");
         const m = gfa(zpl);
         expect(m.slice(1, 4)).toEqual(["2", "2", "1"]);
         expect(expand(m[4]!, 1)).toBe("F00F");
     });
 
     it("computes byte-per-row / total-byte counts correctly for a wider bitmap", () => {
-        const zpl = pbmRawToZplLabel(makePbmRaw(16, 3, [0xff, 0x00, 0x0f, 0xf0, 0xaa, 0x55])).toString("ascii");
+        const zpl = pbmRawToZplLabel(makePbmRaw(16, 3, [0xff, 0x00, 0x0f, 0xf0, 0xaa, 0x55]), true).toString("ascii");
         const m = gfa(zpl);
         expect(m.slice(1, 4)).toEqual(["6", "6", "2"]);
         expect(expand(m[4]!, 2)).toBe("FF000FF0AA55");
@@ -406,7 +413,7 @@ describe("pbmRawToZplLabel", () => {
         for (let y = 0; y < h; y++)
             for (let x = 0; x < bpr; x++)
                 bytes.push(y > 100 && y < 300 && x > 10 && x < 60 ? 0xff : y % 97 === 0 ? 0xaa : (x * 7 + y) % 251 === 0 ? 0x3c : 0x00);
-        const zpl = pbmRawToZplLabel(makePbmRaw(w, h, bytes)).toString("ascii");
+        const zpl = pbmRawToZplLabel(makePbmRaw(w, h, bytes), true).toString("ascii");
         const m = gfa(zpl);
         expect(expand(m[4]!, bpr)).toBe(Buffer.from(bytes).toString("hex").toUpperCase());
         expect(zpl.length).toBeLessThan((bpr * h * 2) / 4);
