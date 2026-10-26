@@ -73,6 +73,11 @@ export const DOCUMENTS_PRINTER_BINDING =
 // PBOM/declaration documents (text + line graphics) while being ~4× faster
 // to render than the Ghostscript default of 600. Set to 600 if you need
 // photo-quality output.
+// Paper every documentation page is printed on. Pages of another size
+// (A4 landscape, B4, 330x233 mm drawings…) are rotated and scaled to fit
+// it instead of being cut off or making the printer ask for other paper.
+// Empty = print each page at its own size (the old behaviour).
+export const DOCUMENTS_PRINTER_PAPER = process.env.DOCUMENTS_PRINTER_PAPER ?? "a4";
 export const DOCUMENTS_PRINTER_DPI = parseInt(
     process.env.DOCUMENTS_PRINTER_DPI || "300",
     10,
@@ -352,11 +357,12 @@ export async function renderPdfToZplBuffer(pdfPath: string, dpi: number, compres
  * Renders a PDF into the printer's native language via Ghostscript,
  * returning the raw bytes ready to stream to the printer's socket.
  */
-export async function renderPdfForPrinter(pdfPath: string): Promise<Buffer> {
-    const { execFile } = await import("child_process");
-    const { promisify } = await import("util");
-    const execFileAsync = promisify(execFile);
-
+/**
+ * Ghostscript arguments for rendering a PDF for the documents printer.
+ * fitToPaper: false for things that must keep their own size (a QR sticker
+ * on the documents printer would otherwise fill a whole A4).
+ */
+export function documentsPrinterGsArgs(pdfPath: string, fitToPaper = true): string[] {
     const args = [
         "-dBATCH",
         "-dNOPAUSE",
@@ -365,6 +371,11 @@ export async function renderPdfForPrinter(pdfPath: string): Promise<Buffer> {
         `-r${DOCUMENTS_PRINTER_DPI}`,   // resolution — lower = faster render, same print quality for text/graphics
         "-sOutputFile=-", // stream to stdout instead of writing a file
     ];
+    if (fitToPaper && DOCUMENTS_PRINTER_PAPER) {
+        // Every page on this paper, rotated/scaled to fit (Ghostscript turns
+        // a landscape page to portrait rather than shrinking it).
+        args.push(`-sPAPERSIZE=${DOCUMENTS_PRINTER_PAPER}`, "-dFIXEDMEDIA", "-dPDFFitPage");
+    }
 
     // For PostScript output, duplex is embedded as a gs argument rather
     // than a byte header — the other devices (pxlmono, pxlcolor, ljet4)
@@ -380,8 +391,18 @@ export async function renderPdfForPrinter(pdfPath: string): Promise<Buffer> {
     }
 
     args.push(pdfPath);
+    return args;
+}
 
-    const { stdout } = await execFileAsync(GHOSTSCRIPT_BIN, args, {
+export async function renderPdfForPrinter(
+    pdfPath: string,
+    { fitToPaper = true }: { fitToPaper?: boolean } = {},
+): Promise<Buffer> {
+    const { execFile } = await import("child_process");
+    const { promisify } = await import("util");
+    const execFileAsync = promisify(execFile);
+
+    const { stdout } = await execFileAsync(GHOSTSCRIPT_BIN, documentsPrinterGsArgs(pdfPath, fitToPaper), {
         timeout: 120_000,
         encoding: "buffer" as any,
         maxBuffer: 1024 * 1024 * 200,
@@ -750,7 +771,7 @@ export async function printPngFile(
 ): Promise<void> {
     const tmpPdfPath = pngFileToTempPdf(pngPath);
     try {
-        const rendered = await renderPdfForPrinter(tmpPdfPath);
+        const rendered = await renderPdfForPrinter(tmpPdfPath, { fitToPaper: false });
         for (let i = 0; i < copies; i++) {
             await sendToDocumentsPrinter(rendered);
         }
