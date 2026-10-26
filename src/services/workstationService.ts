@@ -16,12 +16,8 @@ import {
 import {
     DOCUMENTS_PRINTER_HOST,
     DOCUMENTS_PRINTER_PORT,
-    DOCUMENTS_PRINTER_DEVICE,
-    DOCUMENTS_PRINTER_DUPLEX,
-    DOCUMENTS_PRINTER_BINDING,
-    renderPdfForPrinter,
-    applyDuplexToBuffer,
-    sendToDocumentsPrinter,
+    printDocumentPdf,
+    DOCUMENTS_PRINTER_PROTOCOL,
 } from "./documentPrinterService";
 
 const WORKSTATIONS_API_URL =
@@ -976,41 +972,17 @@ async function triggerPrinting(
     }
 
     console.log(
-        `[PRINT] Printing ${filePaths.length} documents for order ${order.productOrder} (${order.salesOrder}/${order.position}) to ${DOCUMENTS_PRINTER_HOST}:${DOCUMENTS_PRINTER_PORT}:`,
+        `[PRINT] Printing ${filePaths.length} documents for order ${order.productOrder} (${order.salesOrder}/${order.position}) ` +
+            `to ${DOCUMENTS_PRINTER_HOST} (${DOCUMENTS_PRINTER_PROTOCOL === "ipp" ? "IPP" : `raw :${DOCUMENTS_PRINTER_PORT}`}):`,
     );
 
-    // Render all PDFs via Ghostscript in parallel, then send them to the
-    // printer sequentially. Rendering is CPU-bound and each file is
-    // independent; sending must be sequential because the printer's raw
-    // TCP port processes one job at a time. This avoids the previous
-    // render-send-render-send staircase where each GS process waited for
-    // the previous TCP send to complete first.
-    const rendered: Array<{ path: string; data: Buffer } | { path: string; error: string }> =
-        await Promise.all(
-            filePaths.map(async (fp) => {
-                try {
-                    const data = await renderPdfForPrinter(fp);
-                    const withDuplex = applyDuplexToBuffer(
-                        data,
-                        DOCUMENTS_PRINTER_DEVICE,
-                        DOCUMENTS_PRINTER_DUPLEX,
-                        DOCUMENTS_PRINTER_BINDING,
-                    );
-                    return { path: fp, data: withDuplex };
-                } catch (err: any) {
-                    console.error(`[PRINT] Failed to render ${fp}: ${err.message}`);
-                    return { path: fp, error: err.message };
-                }
-            }),
-        );
-
-    for (const result of rendered) {
-        if ("error" in result) continue;
+    // One job per document, in order (see documentPrinterService.printDocumentPdf).
+    for (const fp of filePaths) {
         try {
-            await sendToDocumentsPrinter(result.data);
-            console.log(`  - printed ${result.path}`);
+            await printDocumentPdf(fp);
+            console.log(`  - printed ${fp}`);
         } catch (err: any) {
-            console.error(`[PRINT] Failed to send ${result.path} to printer: ${err.message}`);
+            console.error(`[PRINT] Failed to print ${fp}: ${err.message}`);
         }
     }
     cleanup();

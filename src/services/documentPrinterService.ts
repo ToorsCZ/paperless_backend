@@ -436,16 +436,136 @@ export function sendToDocumentsPrinter(data: Buffer): Promise<void> {
     });
 }
 
-/** Renders a PDF and sends it to the printer in one step. */
-export async function printPdfFile(pdfPath: string): Promise<void> {
-    const rendered = await renderPdfForPrinter(pdfPath);
-    const withDuplex = applyDuplexToBuffer(
-        rendered,
+// ─── IPP printing (documents printer) ───────────────────────────────────────
+//
+// "ipp" (default): the PDF itself goes to the printer over IPP — no
+// Ghostscript rendering; duplex, paper and fit-to-page are IPP job
+// attributes, and the printer answers whether it took the job. "raw": the
+// old way — Ghostscript renders PCL-XL, sent blind to port 9100 (the
+// office bizhub stopped printing raw port-9100 jobs).
+export const DOCUMENTS_PRINTER_PROTOCOL = (process.env.DOCUMENTS_PRINTER_PROTOCOL || "ipp").toLowerCase();
+const DOCUMENTS_PRINTER_IPP_PATH = process.env.DOCUMENTS_PRINTER_IPP_PATH || "/ipp/print";
+// IPP "media" names for DOCUMENTS_PRINTER_PAPER.
+const IPP_MEDIA: Record<string, string> = { a4: "iso_a4_210x297mm", a3: "iso_a3_297x420mm", letter: "na_letter_8.5x11in" };
+
+function ippAttr(tag: number, name: string, value: Buffer | string): Buffer {
+    const n = Buffer.from(name, "utf8");
+    const v = Buffer.isBuffer(value) ? value : Buffer.from(value, "utf8");
+    const b = Buffer.alloc(5 + n.length + v.length);
+    b[0] = tag;
+    b.writeUInt16BE(n.length, 1);
+    n.copy(b, 3);
+    b.writeUInt16BE(v.length, 3 + n.length);
+    v.copy(b, 5 + n.length);
+    return b;
+}
+
+/**
+ * An IPP 1.1 Print-Job request for one PDF: printer-uri, user and job name,
+ * document-format application/pdf, then the job attributes — sides (duplex
+ * per DOCUMENTS_PRINTER_DUPLEX/BINDING), copies, and, when fitToPaper, media
+ * (DOCUMENTS_PRINTER_PAPER) + print-scaling=fit, otherwise print-scaling=none.
+ */
+export function buildIppPrintJob(
+    printerUri: string,
+    pdf: Buffer,
+    { jobName, fitToPaper = true, copies = 1 }: { jobName: string; fitToPaper?: boolean; copies?: number },
+): Buffer {
+    const int32 = (n: number) => {
+        const b = Buffer.alloc(4);
+        b.writeInt32BE(n);
+        return b;
+    };
+    const sides = !DOCUMENTS_PRINTER_DUPLEX
+        ? "one-sided"
+        : DOCUMENTS_PRINTER_BINDING === "SHORTEDGE"
+          ? "two-sided-short-edge"
+          : "two-sided-long-edge";
+    const media = fitToPaper && DOCUMENTS_PRINTER_PAPER ? IPP_MEDIA[DOCUMENTS_PRINTER_PAPER.toLowerCase()] : undefined;
+    return Buffer.concat([
+        Buffer.from([0x01, 0x01, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01]), // IPP 1.1, Print-Job, request-id 1
+        Buffer.from([0x01]), // operation attributes
+        ippAttr(0x47, "attributes-charset", "utf-8"),
+        ippAttr(0x48, "attributes-natural-language", "en"),
+        ippAttr(0x45, "printer-uri", printerUri),
+        ippAttr(0x42, "requesting-user-name", "paperless"),
+        ippAttr(0x42, "job-name", jobName.slice(0, 200)),
+        ippAttr(0x49, "document-format", "application/pdf"),
+        Buffer.from([0x02]), // job attributes
+        ippAttr(0x44, "sides", sides),
+        ippAttr(0x21, "copies", int32(Math.max(1, copies))),
+        ...(media ? [ippAttr(0x44, "media", media)] : []),
+        ippAttr(0x44, "print-scaling", fitToPaper ? "fit" : "none"),
+        Buffer.from([0x03]), // end of attributes
+        pdf,
+    ]);
+}
+
+/** Sends a PDF to the documents printer over IPP; resolves with the job id. */
+async function ippPrintPdf(pdf: Buffer, options: { jobName: string; fitToPaper?: boolean; copies?: number }): Promise<number | null> {
+    const http = await import("http");
+    const port = Number(process.env.DOCUMENTS_PRINTER_IPP_PORT || 631);
+    const body = buildIppPrintJob(`ipp://${DOCUMENTS_PRINTER_HOST}:${port}${DOCUMENTS_PRINTER_IPP_PATH}`, pdf, options);
+    const res: Buffer = await new Promise((resolve, reject) => {
+        const req = http.request(
+            {
+                host: DOCUMENTS_PRINTER_HOST,
+                port,
+                path: DOCUMENTS_PRINTER_IPP_PATH,
+                method: "POST",
+                headers: { "Content-Type": "application/ipp", "Content-Length": body.length },
+                timeout: 60_000,
+            },
+            (r) => {
+                const chunks: Buffer[] = [];
+                r.on("data", (c: Buffer) => chunks.push(c));
+                r.on("end", () =>
+                    r.statusCode === 200 ? resolve(Buffer.concat(chunks)) : reject(new Error(`IPP HTTP ${r.statusCode}`)),
+                );
+            },
+        );
+        req.on("error", reject);
+        req.on("timeout", () => req.destroy(new Error("Documents printer (IPP) timed out")));
+        req.end(body);
+    });
+    // 0x0000-0x00FF = success (0x0001/0x0002: some attribute ignored or substituted).
+    const status = res.length >= 4 ? res.readUInt16BE(2) : 0xffff;
+    if (status > 0x00ff) throw new Error(`printer refused the job (IPP status 0x${status.toString(16).padStart(4, "0")})`);
+    const at = res.indexOf(Buffer.from([0x21, 0x00, 0x06, ...Buffer.from("job-id")]));
+    return at >= 0 ? res.readInt32BE(at + 11) : null;
+}
+
+/**
+ * Prints one PDF on the documents printer — over IPP (default) or, with
+ * DOCUMENTS_PRINTER_PROTOCOL=raw, rendered by Ghostscript and sent to port
+ * 9100. fitToPaper: put every page on DOCUMENTS_PRINTER_PAPER, scaled to fit
+ * (documentation); false keeps the page's own size (a QR sticker).
+ */
+export async function printDocumentPdf(
+    pdfPath: string,
+    { fitToPaper = true, copies = 1 }: { fitToPaper?: boolean; copies?: number } = {},
+): Promise<void> {
+    if (DOCUMENTS_PRINTER_PROTOCOL === "ipp") {
+        const jobId = await ippPrintPdf(fs.readFileSync(pdfPath), {
+            jobName: path.basename(pdfPath),
+            fitToPaper,
+            copies,
+        });
+        console.log(`[PRINT] IPP job ${jobId ?? "?"} accepted: ${path.basename(pdfPath)}`);
+        return;
+    }
+    const rendered = applyDuplexToBuffer(
+        await renderPdfForPrinter(pdfPath, { fitToPaper }),
         DOCUMENTS_PRINTER_DEVICE,
         DOCUMENTS_PRINTER_DUPLEX,
         DOCUMENTS_PRINTER_BINDING,
     );
-    await sendToDocumentsPrinter(withDuplex);
+    for (let i = 0; i < Math.max(1, copies); i++) await sendToDocumentsPrinter(rendered);
+}
+
+/** Renders a PDF and sends it to the printer in one step. */
+export async function printPdfFile(pdfPath: string): Promise<void> {
+    await printDocumentPdf(pdfPath);
 }
 
 /**
@@ -771,6 +891,7 @@ export async function printPngFile(
 ): Promise<void> {
     const tmpPdfPath = pngFileToTempPdf(pngPath);
     try {
+        // QR stickers stay on the old raw path, untouched by the IPP switch.
         const rendered = await renderPdfForPrinter(tmpPdfPath, { fitToPaper: false });
         for (let i = 0; i < copies; i++) {
             await sendToDocumentsPrinter(rendered);
