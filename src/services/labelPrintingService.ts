@@ -1018,8 +1018,9 @@ export function generateZpl(
 // ─── expedition date label ──────────────────────────────────────────────────
 //
 // MasterPlan's planned expedition date for the order, printed as its own
-// label after each box label of a type with dateLabel "Ano" (motors,
-// triang. plate, …), so every box carries the date it ships.
+// label after each expedition label (a row with a delivery address) of a
+// type with dateLabel "Ano" (motors, triang. plate, …), so every shipped box
+// carries the date it ships.
 
 const EXPEDICE_API_URL = process.env.EXPEDICE_API_URL || "http://tocz-app4:5120/api/expedice";
 
@@ -1635,7 +1636,9 @@ export async function handleLabelPrinting(
                         : generateEzpl(row, config.template);
 
                 let dateLabel: Buffer | null = null;
-                if (entry.dateLabel === "Ano") {
+                // Only expedition labels — the rows with a delivery address,
+                // not the internal ones.
+                if (entry.dateLabel === "Ano" && row.deliveryAddress.trim()) {
                     expedition ??= fetchExpedition(projectNumber(row).slice(1), order.position);
                     const exp = await expedition;
                     if (exp) dateLabel = generateExpeditionLabel(row, exp, wpLang, wpDpi);
