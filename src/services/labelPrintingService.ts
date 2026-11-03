@@ -1018,7 +1018,7 @@ export function generateZpl(
 // ─── expedition date label ──────────────────────────────────────────────────
 //
 // MasterPlan's planned expedition date for the order, printed as its own
-// label after each expedition label (a row with a delivery address) of a
+// label after each expedition label (full label with the address) of a
 // type with dateLabel "Ano" (motors, triang. plate, …), so every shipped box
 // carries the date it ships.
 
@@ -1636,9 +1636,10 @@ export async function handleLabelPrinting(
                         : generateEzpl(row, config.template);
 
                 let dateLabel: Buffer | null = null;
-                // Only expedition labels — the rows with a delivery address,
-                // not the internal ones.
-                if (entry.dateLabel === "Ano" && row.deliveryAddress.trim()) {
+                // Only expedition labels — the full label with the delivery
+                // address, not the "INTERNAL PURPOSE" one (*_hw_kr). The CSV
+                // has the address on every row, so the template decides.
+                if (entry.dateLabel === "Ano" && config.template !== "aktualniCMDinter") {
                     expedition ??= fetchExpedition(projectNumber(row).slice(1), order.position);
                     const exp = await expedition;
                     if (exp) dateLabel = generateExpeditionLabel(row, exp, wpLang, wpDpi);

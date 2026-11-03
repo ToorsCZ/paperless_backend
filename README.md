@@ -18,8 +18,9 @@ hardware labels/QR stickers, and pushes live updates over Socket.IO.
   - Hardware label + QR sticker printing (`labelPrintingService.ts`).
     Label types with `"dateLabel":"Ano"` in `label-types.json` (the
     KM-SVM group: motors, triang. plate, …) get an extra label with the
-    planned expedition date after every expedition label (CSV row with a
-    delivery address), from MasterPlan's
+    planned expedition date after every expedition label (the full label
+    with the delivery address, not the internal `*_hw_kr` one), from
+    MasterPlan's
     `GET http://tocz-app4:5120/api/expedice?zak=<project>&poz=<position>`
     (`EXPEDICE_API_URL` to override)
   - Order documentation printing on `STARTED` (Hardware) — the
