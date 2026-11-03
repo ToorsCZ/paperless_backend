@@ -29,6 +29,7 @@
 import fs from "fs";
 import path from "path";
 import net from "net";
+import axios from "axios";
 import { getDb } from "../config/database";
 import { OrderUpdate, motorCycleRange } from "./workstationService";
 import {
@@ -279,6 +280,9 @@ interface ParametryEntry {
     copies: number;
     printMethod: string;
     lastCycleNum: string;
+    // "Ano" → every copy of this label is followed by an expedition-date
+    // label (see fetchExpedition).
+    dateLabel?: string;
 }
 
 export let parametryConfig: ParametryEntry[] = [];
@@ -1011,6 +1015,56 @@ export function generateZpl(
     return Buffer.from(block + extra + "\n", "ascii");
 }
 
+// ─── expedition date label ──────────────────────────────────────────────────
+//
+// MasterPlan's planned expedition date for the order, printed as its own
+// label after each box label of a type with dateLabel "Ano" (motors,
+// triang. plate, …), so every box carries the date it ships.
+
+const EXPEDICE_API_URL = process.env.EXPEDICE_API_URL || "http://tocz-app4:5120/api/expedice";
+
+export interface Expedition {
+    date: string; // DD.MM.YYYY
+    time: string; // HH:MM, "" when not planned
+}
+
+/** zak = project number (digits only), poz = position. null when MasterPlan
+ * has no date for it or can't be reached. */
+export async function fetchExpedition(project: string, position: string): Promise<Expedition | null> {
+    if (!project) return null;
+    try {
+        const { data } = await axios.get(EXPEDICE_API_URL, {
+            params: { zak: project, poz: position },
+            timeout: 5000,
+        });
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(data?.datum_expedice ?? "");
+        if (!data?.ok || !m) return null;
+        return { date: `${m[3]}.${m[2]}.${m[1]}`, time: data.cas_expedice ?? "" };
+    } catch (err: any) {
+        console.error(`[LABELS] Expedition date for ${project}/${position}: ${err.message}`);
+        return null;
+    }
+}
+
+export function generateExpeditionLabel(label: LabelRow, exp: Expedition, lang: "ezpl" | "zpl", dpi: number): Buffer {
+    const pos3 = label.position.padStart(3, "0");
+    const lines: [string, number, number, number, string][] = [
+        // font, x, y, size multiplier, text
+        ["E", 22, 40, 2, label.salesOrder],
+        ["E", 22, 120, 2, pos3],
+        ["E", PROJECT_X, PROJECT_Y, 2, projectNumber(label)],
+        ["E", 50, 380, 2, "EXPEDICE"],
+        ["E", 50, 480, 3, exp.date],
+        ["E", 50, 640, 2, exp.time],
+    ];
+    if (lang === "zpl") {
+        const body = lines.map(([f, x, y, mul, text]) => zplText(f, x, y, mul, mul, text, dpi));
+        return Buffer.from(["^XA", ...body, "^XZ", ""].join("\n"), "ascii");
+    }
+    const body = lines.filter(([, , , , text]) => text).map(([f, x, y, mul, text]) => `A${f},${x},${y},${mul},${mul},0,0,${ezplValue(text)}`);
+    return Buffer.from([ezplHeader(), ...body, "E", ""].join("\n"), "latin1");
+}
+
 // ─── printer I/O ─────────────────────────────────────────────────────
 //
 // This backend runs on Windows Server, so we can send print jobs the exact
@@ -1524,6 +1578,8 @@ export async function handleLabelPrinting(
 
     let printed = 0;
     let skipped = 0;
+    // Fetched once per run, only if some printed type wants a date label.
+    let expedition: Promise<Expedition | null> | undefined;
 
     // VBA iterates parametry entries FIRST, then CSV rows — maintain parametry order
     for (const entry of parametryConfig) {
@@ -1578,16 +1634,25 @@ export async function handleLabelPrinting(
                         ? generateZpl(row, config.template, wpDpi)
                         : generateEzpl(row, config.template);
 
+                let dateLabel: Buffer | null = null;
+                if (entry.dateLabel === "Ano") {
+                    expedition ??= fetchExpedition(projectNumber(row).slice(1), order.position);
+                    const exp = await expedition;
+                    if (exp) dateLabel = generateExpeditionLabel(row, exp, wpLang, wpDpi);
+                    else console.warn(`[LABELS] No expedition date in MasterPlan for ${projectNumber(row)}/${order.position} — date label skipped`);
+                }
+
                 if (!shouldPrint) {
                     const reason = !hardwareConfigured ? "no printer configured" : "printing disabled via live config";
                     console.log(
-                        `[LABELS] [DRY RUN] (${reason}) ${copies}x ${config.template} | ` +
+                        `[LABELS] [DRY RUN] (${reason}) ${copies}x ${config.template}${dateLabel ? " + date label" : ""} | ` +
                             `${row.labelType} | ${row.salesOrder}/${row.position} | ` +
                             `${row.packagePart} ${row.packageType} | ${row.customerName}`,
                     );
                 } else {
                     for (let i = 0; i < copies; i++) {
                         await sendToLabelPrinter(labelData, order.workplace);
+                        if (dateLabel) await sendToLabelPrinter(dateLabel, order.workplace);
                     }
                 }
 

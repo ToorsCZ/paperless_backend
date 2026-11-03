@@ -15,7 +15,12 @@ hardware labels/QR stickers, and pushes live updates over Socket.IO.
 - **Order-update webhook** — the production system calls
   `POST /workstations/order-update` on `STARTED`/`FINISHED` order events.
   This single event fans out to:
-  - Hardware label + QR sticker printing (`labelPrintingService.ts`)
+  - Hardware label + QR sticker printing (`labelPrintingService.ts`).
+    Label types with `"dateLabel":"Ano"` in `label-types.json` (the
+    KM-SVM group: motors, triang. plate, …) get an extra label with the
+    planned expedition date after every box label, from MasterPlan's
+    `GET http://tocz-app4:5120/api/expedice?zak=<project>&poz=<position>`
+    (`EXPEDICE_API_URL` to override)
   - Order documentation printing on `STARTED` (Hardware) — the
     `DOCUMENTS_TYPES` documents fetched from doc_manager, once per
     project/position (`document_print_log`)
