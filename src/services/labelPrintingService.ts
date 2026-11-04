@@ -29,13 +29,16 @@
 import fs from "fs";
 import path from "path";
 import net from "net";
+import os from "os";
 import axios from "axios";
+import { PDFDocument, StandardFonts, rgb, pushGraphicsState, popGraphicsState, setCharacterSqueeze } from "pdf-lib";
 import { getDb } from "../config/database";
 import { OrderUpdate, motorCycleRange } from "./workstationService";
 import {
     DOCUMENTS_PRINTER_HOST,
     printPngFile,
     renderPngAsZplLabel,
+    renderPdfToZplBuffer,
     PREP_LABEL_PAGE_WIDTH_PT,
     PREP_LABEL_PAGE_HEIGHT_PT,
 } from "./documentPrinterService";
@@ -1050,20 +1053,56 @@ export async function fetchExpedition(project: string, position: string): Promis
 
 type Text = [font: string, x: number, y: number, xMul: number, yMul: number, text: string];
 
-export function generateExpeditionLabel(label: LabelRow, exp: Expedition, lang: "ezpl" | "zpl", dpi: number): Buffer {
+function expeditionFooter(label: LabelRow): string {
     // CSV values are cleaned here; the footer's own comma is fine — it's the
     // last field, the Godex reads the rest of the line as text.
-    const footer = `PO ${ezplValue(label.salesOrder)}/${ezplValue(projectNumber(label))}, poz. ${label.position.padStart(3, "0")}`;
-    // font, x, y, x-mult, y-mult, text — layout from the plant's own .prn
+    return `PO ${ezplValue(label.salesOrder)}/${ezplValue(projectNumber(label))}, poz. ${label.position.padStart(3, "0")}`;
+}
+
+/**
+ * The expedition label as a 100 × 130 mm PDF, matching how the Godex prints
+ * the EZPL template below. The Zebra gets this rasterized (like the prep
+ * label) — translating the Godex bitmap fonts to ZPL ones came out too big.
+ */
+export async function buildExpeditionLabelPdf(label: LabelRow, exp: Expedition): Promise<Buffer> {
+    const pdf = await PDFDocument.create();
+    const H = PREP_LABEL_PAGE_HEIGHT_PT;
+    const page = pdf.addPage([PREP_LABEL_PAGE_WIDTH_PT, H]);
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    // text, x, baseline from the top, size (pt), width % — measured off the
+    // Godex print of the template
+    const lines: [string, number, number, number, number][] = [
+        ["PLANOVANE DATUM EXPEDICE", 24, 19.8, 15.9, 99],
+        [exp.date, 16.6, 138.2, 65.8, 71],
+        [exp.time, 38, 246, 74.9, 102],
+        [expeditionFooter(label), 15.5, 318.3, 18.4, 104],
+    ];
+    for (const [text, x, baseline, size, width] of lines) {
+        if (!text) continue;
+        page.pushOperators(pushGraphicsState(), setCharacterSqueeze(width));
+        page.drawText(text, { x, y: H - baseline, size, font });
+        page.pushOperators(popGraphicsState());
+    }
+    page.drawRectangle({ x: 14.2, y: H - 284.2, width: 253.5, height: 1.1, color: rgb(0, 0, 0) });
+    return Buffer.from(await pdf.save());
+}
+
+export async function generateExpeditionLabel(label: LabelRow, exp: Expedition, lang: "ezpl" | "zpl", dpi: number): Promise<Buffer> {
+    if (lang === "zpl") {
+        const tmp = path.join(os.tmpdir(), `expedice_${Date.now()}_${Math.random().toString(36).slice(2)}.pdf`);
+        try {
+            await fs.promises.writeFile(tmp, await buildExpeditionLabelPdf(label, exp));
+            return await renderPdfToZplBuffer(tmp, dpi, true);
+        } finally {
+            fs.unlink(tmp, () => {});
+        }
+    }
+    // font, x, y, x-mult, y-mult, text — the plant's own .prn
     const title: Text = ["B", 63, 16, 2, 2, "PLANOVANE DATUM EXPEDICE"];
     const date: Text = ["C", 40, 220, 5, 7, exp.date];
     const time: Text = ["C", 100, 500, 8, 8, exp.time];
-    const foot: Text = ["C", 40, 850, 2, 2, footer];
+    const foot: Text = ["C", 40, 850, 2, 2, expeditionFooter(label)];
     const line = [40, 800, 755, 803] as const;
-    if (lang === "zpl") {
-        const t = ([f, x, y, xm, ym, s]: Text) => zplText(f, x, y, xm, ym, s, dpi);
-        return Buffer.from(["^XA", t(title), t(date), t(time), zplLine(...line), t(foot), "^XZ", ""].join("\n"), "ascii");
-    }
     const t = ([f, x, y, xm, ym, s]: Text) => (s ? [`A${f},${x},${y},${xm},${ym},0,0,${s}`] : []);
     return Buffer.from(
         [
@@ -1654,7 +1693,7 @@ export async function handleLabelPrinting(
                 if (entry.dateLabel === "Ano" && config.template !== "aktualniCMDinter") {
                     expedition ??= fetchExpedition(projectNumber(row).slice(1), order.position);
                     const exp = await expedition;
-                    if (exp) dateLabel = generateExpeditionLabel(row, exp, wpLang, wpDpi);
+                    if (exp) dateLabel = await generateExpeditionLabel(row, exp, wpLang, wpDpi);
                     else console.warn(`[LABELS] No expedition date in MasterPlan for ${projectNumber(row)}/${order.position} — date label skipped`);
                 }
 
