@@ -34,9 +34,9 @@ describe("generateExpeditionLabel", () => {
     it("EZPL: one label with order, position, project and the date", () => {
         const ezpl = generateExpeditionLabel(row, exp, "ezpl", 203).toString("latin1");
         expect(ezpl).toContain("AE,22,40,2,2,0,0,252977");
-        expect(ezpl).toContain("AE,22,120,2,2,0,0,010");
+        expect(ezpl).toContain("AE,22,130,2,2,0,0,010");
         expect(ezpl).toContain("Z605001");
-        expect(ezpl).toContain("AE,50,480,3,3,0,0,03.11.2026");
+        expect(ezpl).toContain("AE,50,550,3,3,0,0,03.11.2026");
         expect(ezpl.match(/^E$/gm)).toHaveLength(1);
     });
 

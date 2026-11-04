@@ -1052,11 +1052,11 @@ export function generateExpeditionLabel(label: LabelRow, exp: Expedition, lang: 
     const lines: [string, number, number, number, string][] = [
         // font, x, y, size multiplier, text
         ["E", 22, 40, 2, label.salesOrder],
-        ["E", 22, 120, 2, pos3],
-        ["E", PROJECT_X, PROJECT_Y, 2, projectNumber(label)],
-        ["E", 50, 380, 2, "EXPEDICE"],
-        ["E", 50, 480, 3, exp.date],
-        ["E", 50, 640, 2, exp.time],
+        ["E", 22, 130, 2, pos3],
+        ["E", 22, 220, 2, projectNumber(label)],
+        ["E", 50, 440, 2, "EXPEDICE"],
+        ["E", 50, 550, 3, exp.date],
+        ["E", 50, 710, 2, exp.time],
     ];
     if (lang === "zpl") {
         const body = lines.map(([f, x, y, mul, text]) => zplText(f, x, y, mul, mul, text, dpi));
