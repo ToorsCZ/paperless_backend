@@ -1040,30 +1040,42 @@ export async function fetchExpedition(project: string, position: string): Promis
         });
         const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(data?.datum_expedice ?? "");
         if (!data?.ok || !m) return null;
-        return { date: `${m[3]}.${m[2]}.${m[1]}`, time: data.cas_expedice ?? "" };
+        const time = /^\d{2}:\d{2}$/.test(data.cas_expedice ?? "") ? data.cas_expedice : "";
+        return { date: `${m[3]}.${m[2]}.${m[1]}`, time };
     } catch (err: any) {
         console.error(`[LABELS] Expedition date for ${project}/${position}: ${err.message}`);
         return null;
     }
 }
 
+type Text = [font: string, x: number, y: number, xMul: number, yMul: number, text: string];
+
 export function generateExpeditionLabel(label: LabelRow, exp: Expedition, lang: "ezpl" | "zpl", dpi: number): Buffer {
-    const pos3 = label.position.padStart(3, "0");
-    const lines: [string, number, number, number, string][] = [
-        // font, x, y, size multiplier, text
-        ["E", 22, 40, 2, label.salesOrder],
-        ["E", 22, 130, 2, pos3],
-        ["E", 22, 220, 2, projectNumber(label)],
-        ["E", 50, 440, 2, "EXPEDICE"],
-        ["E", 50, 550, 3, exp.date],
-        ["E", 50, 710, 2, exp.time],
-    ];
+    // CSV values are cleaned here; the footer's own comma is fine — it's the
+    // last field, the Godex reads the rest of the line as text.
+    const footer = `PO ${ezplValue(label.salesOrder)}/${ezplValue(projectNumber(label))}, poz. ${label.position.padStart(3, "0")}`;
+    // font, x, y, x-mult, y-mult, text — layout from the plant's own .prn
+    const title: Text = ["B", 63, 16, 2, 2, "PLANOVANE DATUM EXPEDICE"];
+    const date: Text = ["C", 40, 220, 5, 7, exp.date];
+    const time: Text = ["C", 100, 500, 8, 8, exp.time];
+    const foot: Text = ["C", 40, 850, 2, 2, footer];
+    const line = [40, 800, 755, 803] as const;
     if (lang === "zpl") {
-        const body = lines.map(([f, x, y, mul, text]) => zplText(f, x, y, mul, mul, text, dpi));
-        return Buffer.from(["^XA", ...body, "^XZ", ""].join("\n"), "ascii");
+        const t = ([f, x, y, xm, ym, s]: Text) => zplText(f, x, y, xm, ym, s, dpi);
+        return Buffer.from(["^XA", t(title), t(date), t(time), zplLine(...line), t(foot), "^XZ", ""].join("\n"), "ascii");
     }
-    const body = lines.filter(([, , , , text]) => text).map(([f, x, y, mul, text]) => `A${f},${x},${y},${mul},${mul},0,0,${ezplValue(text)}`);
-    return Buffer.from([ezplHeader(), ...body, "E", ""].join("\n"), "latin1");
+    const t = ([f, x, y, xm, ym, s]: Text) => (s ? [`A${f},${x},${y},${xm},${ym},0,0,${s}`] : []);
+    return Buffer.from(
+        [
+            ...ezplHeader().split("\n").slice(0, -2), // up to ^L, without the Dy/Th date formats
+            ...t(title), ...t(date), ...t(time),
+            `Lo,${line.join(",")}`,
+            ...t(foot),
+            "E",
+            "",
+        ].join("\n"),
+        "latin1",
+    );
 }
 
 // ─── printer I/O ─────────────────────────────────────────────────────

@@ -31,13 +31,19 @@ describe("fetchExpedition", () => {
 describe("generateExpeditionLabel", () => {
     const exp = { date: "03.11.2026", time: "09:00" };
 
-    it("EZPL: one label with order, position, project and the date", () => {
-        const ezpl = generateExpeditionLabel(row, exp, "ezpl", 203).toString("latin1");
-        expect(ezpl).toContain("AE,22,40,2,2,0,0,252977");
-        expect(ezpl).toContain("AE,22,130,2,2,0,0,010");
-        expect(ezpl).toContain("Z605001");
-        expect(ezpl).toContain("AE,50,550,3,3,0,0,03.11.2026");
-        expect(ezpl.match(/^E$/gm)).toHaveLength(1);
+    it("EZPL: exactly the plant's template", () => {
+        const so = { salesOrder: "605737", position: "10", orderNumber: "Z605765" } as LabelRow;
+        const ezpl = generateExpeditionLabel(so, { date: "12.11.2026", time: "13:00" }, "ezpl", 203).toString("latin1");
+        expect(ezpl).toBe([
+            "^Q130,3", "^W100", "^H5", "^P1", "^S2", "^AD", "^C1", "^R0", "~Q+0", "^O0", "^D0", "^E12", "~R255", "^L",
+            "AB,63,16,2,2,0,0,PLANOVANE DATUM EXPEDICE",
+            "AC,40,220,5,7,0,0,12.11.2026",
+            "AC,100,500,8,8,0,0,13:00",
+            "Lo,40,800,755,803",
+            "AC,40,850,2,2,0,0,PO 605737/Z605765, poz. 010",
+            "E",
+            "",
+        ].join("\n"));
     });
 
     it("ZPL: same fields, no time line when the time is not planned", () => {
