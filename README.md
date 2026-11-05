@@ -40,7 +40,9 @@ hardware labels/QR stickers, and pushes live updates over Socket.IO.
   in `HISTORY\OK` (newest file wins) for the production order, the hardware
   family and the checklist of items that are not in P2L and must be
   prepared by hand (`hardwareOrderLookupService.ts`). An admin-managed BAAN
-  code list narrows that checklist.
+  code list narrows that checklist. Each row carries Masterplan flags from
+  `vyroba`: `locked` (`tisk_zamcen` 1/2) and `tox` (`den_zpracovani` 8 —
+  door toxed together, not screwed).
 - **Prep-station labels** — 100 × 130 mm Godex-sized labels, one per door,
   with a Code 39 barcode of the production order (from Norms, newest
   `txtfiles` row). The door count comes from the newest PTL order file.

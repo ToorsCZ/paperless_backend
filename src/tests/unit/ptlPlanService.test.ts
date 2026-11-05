@@ -218,7 +218,7 @@ describe("getPrepQueue — Masterplan lock annotation", () => {
         );
     }
 
-    function makeMasterplanDbMock(lockedRows: { zak: string; poz: string }[]) {
+    function makeMasterplanDbMock(lockedRows: { zak: string; poz: string; tisk_zamcen?: any; den_zpracovani?: any }[]) {
         const chain: any = {
             then: (resolve: any) => resolve(lockedRows),
         };
@@ -233,7 +233,7 @@ describe("getPrepQueue — Masterplan lock annotation", () => {
     it("annotates locked rows with locked=true when Masterplan reports tisk_zamcen=1", async () => {
         (getDb as jest.Mock).mockResolvedValue(makeMainDbMock(queueRows));
         (getMasterplanDb as jest.Mock).mockResolvedValue(
-            makeMasterplanDbMock([{ zak: "603529", poz: "050" }]),
+            makeMasterplanDbMock([{ zak: "603529", poz: "050", tisk_zamcen: 1 }]),
         );
 
         const result = await getPrepQueue();
@@ -246,13 +246,33 @@ describe("getPrepQueue — Masterplan lock annotation", () => {
 
     it("treats tisk_zamcen 1 (automatic) and 2 (by a user) both as locked", async () => {
         (getDb as jest.Mock).mockResolvedValue(makeMainDbMock(queueRows));
-        const mp = makeMasterplanDbMock([]);
-        (getMasterplanDb as jest.Mock).mockResolvedValue(mp);
+        (getMasterplanDb as jest.Mock).mockResolvedValue(
+            makeMasterplanDbMock([
+                { zak: "603529", poz: "050", tisk_zamcen: 1 },
+                { zak: "603684", poz: "010", tisk_zamcen: "2" },
+                { zak: "604427", poz: "020", tisk_zamcen: 0 },
+            ]),
+        );
 
-        await getPrepQueue();
+        const result = await getPrepQueue();
 
-        const chain = mp.mock.results[0]!.value;
-        expect(chain.whereIn).toHaveBeenCalledWith("tisk_zamcen", [1, 2]);
+        expect(result.map((r: any) => r.locked)).toEqual([true, true, false]);
+    });
+
+    it("marks den_zpracovani 8 as TOX (toxed, not screwed), nothing else", async () => {
+        (getDb as jest.Mock).mockResolvedValue(makeMainDbMock(queueRows));
+        (getMasterplanDb as jest.Mock).mockResolvedValue(
+            makeMasterplanDbMock([
+                { zak: "603529", poz: "050", den_zpracovani: "8" },
+                { zak: "603684", poz: "010", den_zpracovani: "1-EXT" },
+                { zak: "604427", poz: "020", den_zpracovani: null },
+            ]),
+        );
+
+        const result = await getPrepQueue();
+
+        expect(result.map((r: any) => r.tox)).toEqual([true, false, false]);
+        expect(result.every((r: any) => r.locked === false)).toBe(true);
     });
 
     it("marks all rows unlocked when Masterplan returns no locked rows", async () => {

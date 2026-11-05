@@ -440,12 +440,13 @@ export async function getPrepQueue(filters: PrepQueueFilters = {}) {
     // physical preparation is blocked by an external decision (e.g. the
     // planning department has locked the order for reprinting). A single
     // batch query fetches all relevant locks so this is not N+1.
-    const lockedKeys = await fetchLockedKeys(rows);
+    const { locked, tox } = await fetchMasterplanFlags(rows);
     return rows
         .map((row) => ({
             ...row,
             hardware_types: hardwareTypesFor(row.hardware_type, row.rail_type),
-            locked: lockedKeys.has(`${row.project_number}::${row.position}`),
+            locked: locked.has(`${row.project_number}::${row.position}`),
+            tox: tox.has(`${row.project_number}::${row.position}`),
         }))
         .filter((row) => !filters.hardwareType || row.hardware_types.includes(filters.hardwareType));
 }
@@ -464,7 +465,22 @@ export async function getPrepQueue(filters: PrepQueueFilters = {}) {
 export async function fetchLockedKeys(
     rows: { project_number: string; position: string }[],
 ): Promise<Set<string>> {
-    if (rows.length === 0) return new Set();
+    return (await fetchMasterplanFlags(rows)).locked;
+}
+
+/**
+ * One Masterplan query for both per-position flags, as
+ * "projectNumber::position" keys:
+ *   locked — vyroba.tisk_zamcen 1 or 2 (see fetchLockedKeys)
+ *   tox    — vyroba.den_zpracovani "8": the door is toxed (clinched)
+ *            together instead of screwed
+ */
+export async function fetchMasterplanFlags(
+    rows: { project_number: string; position: string }[],
+): Promise<{ locked: Set<string>; tox: Set<string> }> {
+    const locked = new Set<string>();
+    const tox = new Set<string>();
+    if (rows.length === 0) return { locked, tox };
 
     try {
         const mpDb = await getMasterplanDb();
@@ -479,23 +495,26 @@ export async function fetchLockedKeys(
             poz: r.position,
         }));
 
-        const locked: { zak: string; poz: string }[] = await mpDb("vyroba")
-            // 1 = locked automatically, 2 = locked by a user — both mean locked here.
-            .whereIn("tisk_zamcen", [1, 2])
+        const found: { zak: string; poz: string; tisk_zamcen: any; den_zpracovani: any }[] = await mpDb("vyroba")
             .where(function () {
                 for (const c of conditions) {
                     this.orWhere({ zak: c.zak, poz: c.poz });
                 }
             })
-            .select("zak", "poz");
+            .select("zak", "poz", "tisk_zamcen", "den_zpracovani");
 
-        return new Set(locked.map((r) => `${r.zak}::${r.poz}`));
+        for (const r of found) {
+            const key = `${r.zak}::${r.poz}`;
+            // 1 = locked automatically, 2 = locked by a user — both mean locked here.
+            if ([1, 2].includes(Number(r.tisk_zamcen))) locked.add(key);
+            if (String(r.den_zpracovani ?? "").trim() === "8") tox.add(key);
+        }
     } catch (err: any) {
         console.error(
-            `[MASTERPLAN] Lock check failed — defaulting all items to unlocked: ${err.message}`,
+            `[MASTERPLAN] Lock/TOX check failed — defaulting all items to unlocked, not TOX: ${err.message}`,
         );
-        return new Set();
     }
+    return { locked, tox };
 }
 
 /** Distinct workplaces currently present in the queue, for building a filter UI. */
