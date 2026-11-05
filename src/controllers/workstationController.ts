@@ -195,13 +195,23 @@ export const getWorkstations = async (req: Request, res: Response) => {
             }
         }
 
-        const result = workstations.map((ws: any) => {
+        const parsed = workstations.map((ws: any) => ({
+            ws,
+            order: ws.current_order_data ? JSON.parse(ws.current_order_data) : null,
+        }));
+        // The station's current order locked in Masterplan → the app warns.
+        const lockedKeys = await fetchLockedKeys(
+            parsed
+                .filter((p: any) => p.order?.projectNumber && p.order?.position)
+                .map((p: any) => ({ project_number: String(p.order.projectNumber), position: String(p.order.position) })),
+        );
+
+        const result = parsed.map(({ ws, order }: any) => {
             const cycle = cycleByStationId.get(ws.id);
             return {
                 ...ws,
-                current_order_data: ws.current_order_data
-                    ? JSON.parse(ws.current_order_data)
-                    : null,
+                current_order_data: order,
+                locked: !!order && lockedKeys.has(`${order.projectNumber}::${order.position}`),
                 // Stations with no current order (or that fell through
                 // every lookup above) default to 1/1.
                 cycle_index: cycle ? cycle.cycle_index : 1,

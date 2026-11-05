@@ -116,6 +116,7 @@ describe("Workstation Controller", () => {
                     current_order_data: { _id: "ord1" },
                     cycle_index: 1,
                     total_cycles: 1,
+                    locked: false,
                 },
                 {
                     id: 2,
@@ -124,6 +125,7 @@ describe("Workstation Controller", () => {
                     current_order_data: null,
                     cycle_index: 1,
                     total_cycles: 1,
+                    locked: false,
                 },
             ]);
         });

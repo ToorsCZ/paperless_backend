@@ -327,6 +327,12 @@ if (process.env.NODE_ENV !== "test") {
             "SERVER",
             `PTL production plan check started (interval: ${PTL_PLAN_CHECK_INTERVAL_MS}ms)`,
         );
+
+        // Masterplan lock history (see services/masterplanLockService.ts)
+        const { runLockWatch, LOCK_CHECK_INTERVAL_MS } = require("./services/masterplanLockService");
+        runLockWatch();
+        setInterval(runLockWatch, LOCK_CHECK_INTERVAL_MS);
+        logger.info("SERVER", `Masterplan lock watch started (interval: ${LOCK_CHECK_INTERVAL_MS}ms)`);
     });
 }
 

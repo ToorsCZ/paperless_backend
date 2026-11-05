@@ -64,7 +64,7 @@ describe("Workstation API Integration", () => {
             // WS1 has no current order, so it gets the 1/1 default cycle
             // fields getWorkstations now always includes.
             expect(response.body).toEqual([
-                { ...mockWorkstations[0], cycle_index: 1, total_cycles: 1 },
+                { ...mockWorkstations[0], cycle_index: 1, total_cycles: 1, locked: false },
             ]);
         });
     });

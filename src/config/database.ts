@@ -677,4 +677,24 @@ const setupDatabase = async (targetDb: Knex) => {
             table.timestamp("created_at").defaultTo(targetDb.fn.now());
         });
     }
+
+    // 26. masterplan_lock_log — history of vyroba.tisk_zamcen, which
+    // Masterplan only keeps as a current value: a row per change seen by
+    // the periodic watch ("poll") and one per PTL start ("started"), see
+    // masterplanLockService.
+    if (!(await targetDb.schema.hasTable("masterplan_lock_log"))) {
+        await targetDb.schema.createTable("masterplan_lock_log", (table) => {
+            table.increments("id").primary();
+            table.string("project_number").notNullable();
+            table.string("position").notNullable();
+            table.integer("tisk_zamcen");
+            table.boolean("locked").notNullable();
+            table.string("source").notNullable();
+            table.string("order_id");
+            table.string("workplace");
+            table.integer("cycle_index");
+            table.timestamp("created_at").defaultTo(targetDb.fn.now());
+            table.index(["project_number", "position"]);
+        });
+    }
 };

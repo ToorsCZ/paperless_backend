@@ -6,6 +6,7 @@ import crypto from "crypto";
 import { getDb, getNormsDb } from "../config/database";
 import { handleLabelPrinting, normalizeWorkplace } from "./labelPrintingService";
 import { checkMotorOrderForAutoFinish } from "./motorOrderService";
+import { checkLockOnStart } from "./masterplanLockService";
 import { isPrintingEnabled } from "./printSettingsService";
 import {
     DOCUMENT_TYPES,
@@ -437,6 +438,9 @@ export const handleOrderUpdate = async (update: OrderUpdate) => {
         }
 
         if (update.action === "STARTED") {
+            // Log the Masterplan lock at the start; warn the app if locked.
+            checkLockOnStart(update);
+
             // Print documents (PBOM, declarations, confirmations) on STARTED
             printDocumentsForOrder(update.order).catch((err) =>
                 console.error("Error printing documents:", err),

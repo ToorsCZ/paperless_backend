@@ -43,6 +43,14 @@ hardware labels/QR stickers, and pushes live updates over Socket.IO.
   code list narrows that checklist. Each row carries Masterplan flags from
   `vyroba`: `locked` (`tisk_zamcen` 1/2) and `tox` (`den_zpracovani` 8 —
   door toxed together, not screwed).
+- **Masterplan lock history** — Masterplan keeps only the current lock, so
+  `masterplanLockService.ts` logs it to `masterplan_lock_log`: every change
+  seen by a watch over the prep queue and orders started in the last 14
+  days (every `LOCK_CHECK_INTERVAL_MS`, default 5 min), plus the value at
+  every PTL `STARTED`. A locked order started by PTL is warned about in the
+  app (socket `order-locked`, `locked` on `GET /workstations`) — a user lock
+  usually means the order is being changed in ERP, and TOORS then refuses
+  to close it ("Project status is Simulated").
 - **Prep-station labels** — 100 × 130 mm Godex-sized labels, one per door,
   with a Code 39 barcode of the production order (from Norms, newest
   `txtfiles` row). The door count comes from the newest PTL order file.
